@@ -32,7 +32,7 @@ pub struct FailureFixPair {
 /// Result of mining a single session.
 #[derive(Debug)]
 pub enum MineResult {
-    /// Session was already mined or had no events.
+    /// Session was already mined and `force` was not set.
     Skipped,
     /// Session was processed, with this many failure-fix pairs found.
     Processed { pairs: usize, events: usize },
@@ -58,6 +58,12 @@ pub fn mine_session(conn: &Connection, session_path: &Path, force: bool) -> Resu
 
     if already_mined {
         if force {
+            // Delete orphaned events first (no ON DELETE CASCADE in schema),
+            // then delete the session row.
+            conn.execute(
+                "DELETE FROM events WHERE session_id = (SELECT id FROM sessions WHERE session_id = ?1)",
+                [&session_id],
+            )?;
             conn.execute(
                 "DELETE FROM sessions WHERE session_id = ?1",
                 [&session_id],
@@ -86,7 +92,7 @@ pub fn mine_session(conn: &Connection, session_path: &Path, force: bool) -> Resu
     let db_session_id = conn.last_insert_rowid();
 
     if events.is_empty() {
-        return Ok(MineResult::Skipped);
+        return Ok(MineResult::Processed { pairs: 0, events: 0 });
     }
 
     // Insert events
@@ -138,7 +144,7 @@ pub fn mine_session(conn: &Connection, session_path: &Path, force: bool) -> Resu
                 ],
             )?;
         }
-        count += 1;
+        count += 1; // count every matched pair (insert or upsert)
     }
 
     Ok(MineResult::Processed {
