@@ -111,7 +111,7 @@ fn run_once() -> Result<()> {
     }
 
     // Mine
-    let mine_summary = mining::mine_all(&history_conn)?;
+    let mine_summary = mining::mine_all(&history_conn, false)?;
     log(&format!(
         "mining: {} processed, {} skipped, {} pairs",
         mine_summary.sessions_processed, mine_summary.sessions_skipped, mine_summary.pairs_found,
@@ -216,7 +216,7 @@ fn tick(data_dir: &std::path::Path) -> Result<()> {
     }
 
     // Mine new sessions
-    let mine_summary = mining::mine_all(&history_conn)?;
+    let mine_summary = mining::mine_all(&history_conn, false)?;
 
     if mine_summary.sessions_processed > 0 || mine_summary.pairs_found > 0 {
         log(&format!(

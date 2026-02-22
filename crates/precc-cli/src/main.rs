@@ -27,6 +27,9 @@ enum Commands {
         /// Mine all unmined sessions
         #[arg(long)]
         all: bool,
+        /// Re-mine sessions even if already recorded (overwrites prior results)
+        #[arg(long)]
+        force: bool,
     },
     /// Manage automation skills
     Skills {
@@ -61,7 +64,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Init) => cmd_init(),
-        Some(Commands::Ingest { file, all }) => cmd_ingest(file, all),
+        Some(Commands::Ingest { file, all, force }) => cmd_ingest(file, all, force),
         Some(Commands::Skills { action }) => cmd_skills(action),
         Some(Commands::Debug { binary, args }) => cmd_debug(binary, args),
         Some(Commands::Report) => cmd_report(),
@@ -153,7 +156,7 @@ fn cmd_init() -> Result<()> {
 // precc ingest
 // =============================================================================
 
-fn cmd_ingest(file: Option<String>, all: bool) -> Result<()> {
+fn cmd_ingest(file: Option<String>, all: bool, force: bool) -> Result<()> {
     let data_dir = db::data_dir()?;
     let conn = db::open_history(&data_dir)?;
 
@@ -165,16 +168,20 @@ fn cmd_ingest(file: Option<String>, all: bool) -> Result<()> {
         }
 
         println!("Mining {}...", path.display());
-        match mining::mine_session(&conn, &path)? {
+        match mining::mine_session(&conn, &path, force)? {
             mining::MineResult::Skipped => println!("  Session already mined or has no events"),
             mining::MineResult::Processed { pairs, events } => {
                 println!("  Found {} event(s), {} failure-fix pair(s)", events, pairs);
             }
         }
     } else if all {
-        // Mine all unmined sessions
-        println!("Scanning for unmined sessions...");
-        let summary = mining::mine_all(&conn)?;
+        // Mine all sessions (or re-mine if --force)
+        if force {
+            println!("Scanning all sessions (force re-mine)...");
+        } else {
+            println!("Scanning for unmined sessions...");
+        }
+        let summary = mining::mine_all(&conn, force)?;
         println!();
         println!("Mining summary:");
         println!("  Sessions processed: {}", summary.sessions_processed);

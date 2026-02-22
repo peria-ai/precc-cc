@@ -39,7 +39,10 @@ pub enum MineResult {
 }
 
 /// Mine a single JSONL session file and insert results into history.db.
-pub fn mine_session(conn: &Connection, session_path: &Path) -> Result<MineResult> {
+///
+/// If `force` is true, any existing record for this session is deleted before
+/// re-mining, allowing the session to be processed again from scratch.
+pub fn mine_session(conn: &Connection, session_path: &Path, force: bool) -> Result<MineResult> {
     let session_id = session_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -54,7 +57,14 @@ pub fn mine_session(conn: &Connection, session_path: &Path) -> Result<MineResult
     )?;
 
     if already_mined {
-        return Ok(MineResult::Skipped);
+        if force {
+            conn.execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                [&session_id],
+            )?;
+        } else {
+            return Ok(MineResult::Skipped);
+        }
     }
 
     let content = std::fs::read_to_string(session_path)
@@ -581,13 +591,15 @@ pub struct MiningSummary {
     pub precc_events_extracted: usize,
 }
 
-/// Mine all unmined sessions. Returns a summary.
-pub fn mine_all(conn: &Connection) -> Result<MiningSummary> {
+/// Mine all sessions. Returns a summary.
+///
+/// If `force` is true, already-mined sessions are re-mined from scratch.
+pub fn mine_all(conn: &Connection, force: bool) -> Result<MiningSummary> {
     let files = find_session_files()?;
     let mut summary = MiningSummary::default();
 
     for file in &files {
-        match mine_session(conn, file) {
+        match mine_session(conn, file, force) {
             Ok(MineResult::Skipped) => summary.sessions_skipped += 1,
             Ok(MineResult::Processed { pairs, events }) => {
                 summary.sessions_processed += 1;
