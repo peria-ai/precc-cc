@@ -1,0 +1,20 @@
+[skill]
+name = "cargo-wrong-dir"
+description = "Detect and fix cargo commands run outside a Rust project"
+source = "builtin"
+priority = 50
+
+[[triggers]]
+type = "command_regex"
+pattern = "^cargo\\s+(build|test|clippy|check|run|fmt|doc|bench)"
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "!Cargo.toml"
+weight = 0.8
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.9

@@ -1,0 +1,20 @@
+[skill]
+name = "npm-wrong-dir"
+description = "Fix npm/npx/pnpm/yarn commands run outside a Node.js project"
+source = "builtin"
+priority = 50
+
+[[triggers]]
+type = "command_regex"
+pattern = "^(npm|npx|pnpm|yarn)\\s+"
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "!package.json"
+weight = 0.8
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.9

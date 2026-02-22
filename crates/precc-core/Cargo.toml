@@ -1,0 +1,17 @@
+[package]
+name = "precc-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core library for PRECC: context resolution, skill matching, GDB, DB, mining, metrics"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+toml.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

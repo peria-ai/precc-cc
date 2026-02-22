@@ -1,0 +1,18 @@
+[package]
+name = "precc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI tool for PRECC: ingest sessions, manage skills, debug, report"
+
+[[bin]]
+name = "precc"
+path = "src/main.rs"
+
+[dependencies]
+precc-core = { path = "../precc-core" }
+anyhow.workspace = true
+clap.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "precc-miner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Background daemon that mines Claude Code session logs for failure patterns"
+
+[dependencies]
+precc-core = { path = "../precc-core" }
+anyhow.workspace = true
+libc.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

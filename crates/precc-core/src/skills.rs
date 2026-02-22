@@ -1,0 +1,413 @@
+//! Pillar 4: Skill matching engine.
+//!
+//! Queries heuristics.db for skills that match the current command,
+//! evaluates triggers, and returns applicable actions sorted by confidence.
+
+use anyhow::Result;
+use regex::Regex;
+use rusqlite::Connection;
+use std::path::Path;
+
+/// A matched skill with its action to apply.
+#[derive(Debug)]
+pub struct SkillMatch {
+    pub skill_name: String,
+    pub action_type: String,
+    pub template: String,
+    pub confidence: f64,
+    pub skill_id: i64,
+}
+
+/// Query heuristics.db for skills matching the given command.
+///
+/// Returns matches sorted by confidence (highest first).
+/// Only returns enabled skills with confidence >= `min_confidence`.
+pub fn find_matches(
+    conn: &Connection,
+    command: &str,
+    min_confidence: f64,
+) -> Result<Vec<SkillMatch>> {
+    // Get all enabled skills with command_regex triggers
+    let mut stmt = conn.prepare_cached(
+        "SELECT s.id, s.name, t.pattern, t.weight, a.action_type, a.template, a.confidence
+         FROM skills s
+         JOIN skill_triggers t ON t.skill_id = s.id
+         JOIN skill_actions a ON a.skill_id = s.id
+         WHERE s.enabled = 1
+           AND t.trigger_type = 'command_regex'
+           AND a.confidence >= ?1
+         ORDER BY s.priority ASC, a.confidence DESC",
+    )?;
+
+    let rows = stmt.query_map([min_confidence], |row| {
+        Ok(CandidateRow {
+            skill_id: row.get(0)?,
+            skill_name: row.get(1)?,
+            pattern: row.get(2)?,
+            weight: row.get(3)?,
+            action_type: row.get(4)?,
+            template: row.get(5)?,
+            confidence: row.get(6)?,
+        })
+    })?;
+
+    let mut matches = Vec::new();
+    for row in rows {
+        let row = row?;
+        // Compile and test the regex trigger
+        if let Ok(re) = Regex::new(&row.pattern) {
+            if re.is_match(command) {
+                // Check file_exists triggers for this skill
+                let file_check_ok = check_file_triggers(conn, row.skill_id)?;
+                if file_check_ok {
+                    matches.push(SkillMatch {
+                        skill_name: row.skill_name,
+                        action_type: row.action_type,
+                        template: row.template,
+                        confidence: row.confidence * row.weight,
+                        skill_id: row.skill_id,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by confidence descending
+    matches.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+    Ok(matches)
+}
+
+struct CandidateRow {
+    skill_id: i64,
+    skill_name: String,
+    pattern: String,
+    weight: f64,
+    action_type: String,
+    template: String,
+    confidence: f64,
+}
+
+/// Check file_exists triggers for a skill.
+/// Returns true if all file_exists conditions are satisfied.
+fn check_file_triggers(conn: &Connection, skill_id: i64) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT pattern FROM skill_triggers
+         WHERE skill_id = ?1 AND trigger_type = 'file_exists'",
+    )?;
+
+    let patterns: Vec<String> = stmt
+        .query_map([skill_id], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if patterns.is_empty() {
+        return Ok(true);
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_default();
+    for pattern in &patterns {
+        if let Some(negated) = pattern.strip_prefix('!') {
+            // '!' prefix means the file must NOT exist
+            if cwd.join(negated).exists() {
+                return Ok(false);
+            }
+        } else {
+            // File must exist
+            if !cwd.join(pattern).exists() {
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+/// Apply a skill action template to produce a modified command.
+///
+/// Supported placeholders:
+/// - `{{original_command}}` — the original command string
+/// - `{{project_root}}` — the resolved project root directory
+pub fn apply_template(template: &str, original_command: &str, project_root: &str) -> String {
+    template
+        .replace("{{original_command}}", original_command)
+        .replace("{{project_root}}", project_root)
+}
+
+/// Record that a skill was activated (for stats tracking).
+pub fn record_activation(conn: &Connection, skill_id: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO skill_stats (skill_id, activated, succeeded, failed, last_used)
+         VALUES (?1, 1, 0, 0, datetime('now'))
+         ON CONFLICT(skill_id) DO UPDATE SET
+           activated = activated + 1,
+           last_used = datetime('now')",
+        [skill_id],
+    )?;
+    Ok(())
+}
+
+/// Load built-in skills from TOML files into heuristics.db (if not already present).
+pub fn load_builtin_skills(conn: &Connection, skills_dir: &Path) -> Result<usize> {
+    let mut loaded = 0;
+
+    let entries = match std::fs::read_dir(skills_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(0),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path)?;
+        if load_skill_toml(conn, &content)? {
+            loaded += 1;
+        }
+    }
+
+    Ok(loaded)
+}
+
+/// Parse a skill TOML and insert into heuristics.db.
+/// Returns true if a new skill was inserted, false if it already existed.
+fn load_skill_toml(conn: &Connection, toml_content: &str) -> Result<bool> {
+    let doc: SkillDoc = toml::from_str(toml_content)?;
+
+    // Check if skill already exists
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM skills WHERE name = ?1",
+        [&doc.skill.name],
+        |r| r.get(0),
+    )?;
+
+    if exists {
+        return Ok(false);
+    }
+
+    let now = chrono_now();
+
+    conn.execute(
+        "INSERT INTO skills (name, description, source, priority, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        rusqlite::params![
+            doc.skill.name,
+            doc.skill.description,
+            doc.skill.source,
+            doc.skill.priority,
+            now
+        ],
+    )?;
+
+    let skill_id = conn.last_insert_rowid();
+
+    for trigger in &doc.triggers {
+        conn.execute(
+            "INSERT INTO skill_triggers (skill_id, trigger_type, pattern, weight)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![skill_id, trigger.r#type, trigger.pattern, trigger.weight],
+        )?;
+    }
+
+    for action in &doc.actions {
+        conn.execute(
+            "INSERT INTO skill_actions (skill_id, action_type, template, confidence)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![skill_id, action.r#type, action.template, action.confidence],
+        )?;
+    }
+
+    // Initialize stats row
+    conn.execute(
+        "INSERT INTO skill_stats (skill_id, activated, succeeded, failed) VALUES (?1, 0, 0, 0)",
+        [skill_id],
+    )?;
+
+    Ok(true)
+}
+
+pub fn chrono_now() -> String {
+    // Simple UTC timestamp without pulling in chrono crate
+    use std::time::SystemTime;
+    let d = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}", d.as_secs())
+}
+
+/// TOML deserialization structures for skill files.
+#[derive(serde::Deserialize)]
+struct SkillDoc {
+    skill: SkillMeta,
+    #[serde(default)]
+    triggers: Vec<TriggerDef>,
+    #[serde(default)]
+    actions: Vec<ActionDef>,
+}
+
+#[derive(serde::Deserialize)]
+struct SkillMeta {
+    name: String,
+    description: String,
+    source: String,
+    #[serde(default = "default_priority")]
+    priority: i32,
+}
+
+fn default_priority() -> i32 {
+    100
+}
+
+#[derive(serde::Deserialize)]
+struct TriggerDef {
+    r#type: String,
+    pattern: String,
+    #[serde(default = "default_weight")]
+    weight: f64,
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+#[derive(serde::Deserialize)]
+struct ActionDef {
+    r#type: String,
+    template: String,
+    #[serde(default = "default_confidence")]
+    confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    fn test_db() -> Connection {
+        let dir = tempfile::tempdir().unwrap();
+        db::open_heuristics(dir.path()).unwrap()
+    }
+
+    #[test]
+    fn load_cargo_wrong_dir_skill() {
+        let conn = test_db();
+        let toml = r#"
+[skill]
+name = "cargo-wrong-dir"
+description = "Fix cargo commands in wrong directory"
+source = "builtin"
+priority = 50
+
+[[triggers]]
+type = "command_regex"
+pattern = "^cargo\\s+(build|test|clippy|check)"
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "!Cargo.toml"
+weight = 0.8
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.9
+"#;
+        assert!(load_skill_toml(&conn, toml).unwrap());
+        // Second load should return false (already exists)
+        assert!(!load_skill_toml(&conn, toml).unwrap());
+    }
+
+    #[test]
+    fn find_matches_returns_matching_skills() {
+        let conn = test_db();
+        let now = chrono_now();
+
+        // Insert a test skill manually
+        conn.execute(
+            "INSERT INTO skills (name, description, source, priority, created_at, updated_at)
+             VALUES ('test-skill', 'test', 'builtin', 100, ?1, ?1)",
+            [&now],
+        )
+        .unwrap();
+        let skill_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO skill_triggers (skill_id, trigger_type, pattern, weight)
+             VALUES (?1, 'command_regex', '^cargo\\s+build', 1.0)",
+            [skill_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO skill_actions (skill_id, action_type, template, confidence)
+             VALUES (?1, 'rewrite_command', 'rtk cargo build', 0.9)",
+            [skill_id],
+        )
+        .unwrap();
+
+        let matches = find_matches(&conn, "cargo build --release", 0.3).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].skill_name, "test-skill");
+        assert_eq!(matches[0].confidence, 0.9);
+    }
+
+    #[test]
+    fn find_matches_filters_by_confidence() {
+        let conn = test_db();
+        let now = chrono_now();
+
+        conn.execute(
+            "INSERT INTO skills (name, description, source, priority, created_at, updated_at)
+             VALUES ('low-conf', 'test', 'mined', 100, ?1, ?1)",
+            [&now],
+        )
+        .unwrap();
+        let skill_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO skill_triggers (skill_id, trigger_type, pattern, weight)
+             VALUES (?1, 'command_regex', '^cargo', 1.0)",
+            [skill_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO skill_actions (skill_id, action_type, template, confidence)
+             VALUES (?1, 'rewrite_command', 'test', 0.2)",
+            [skill_id],
+        )
+        .unwrap();
+
+        // Should be excluded with min_confidence = 0.3
+        let matches = find_matches(&conn, "cargo build", 0.3).unwrap();
+        assert!(matches.is_empty());
+
+        // Should be included with min_confidence = 0.1
+        let matches = find_matches(&conn, "cargo build", 0.1).unwrap();
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn apply_template_replaces_placeholders() {
+        let result = apply_template(
+            "cd {{project_root}} && {{original_command}}",
+            "cargo build",
+            "/home/user/myapp",
+        );
+        assert_eq!(result, "cd /home/user/myapp && cargo build");
+    }
+
+    #[test]
+    fn no_matches_for_unrelated_command() {
+        let conn = test_db();
+        let matches = find_matches(&conn, "echo hello", 0.0).unwrap();
+        assert!(matches.is_empty());
+    }
+}

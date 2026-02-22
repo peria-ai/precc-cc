@@ -1,0 +1,20 @@
+[skill]
+name = "go-wrong-dir"
+description = "Fix go commands run outside a Go project"
+source = "builtin"
+priority = 50
+
+[[triggers]]
+type = "command_regex"
+pattern = "^go\\s+"
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "!go.mod"
+weight = 0.8
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.9
