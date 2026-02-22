@@ -49,8 +49,7 @@ Then add to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "precc-hook",
-            "timeout": 5
+            "command": "/home/YOU/.cargo/bin/precc-hook"
           }
         ]
       }
@@ -58,6 +57,10 @@ Then add to `~/.claude/settings.json`:
   }
 }
 ```
+
+Replace `/home/YOU` with your home directory, or use `$(which precc-hook)` to find the installed path.
+
+> **Performance note:** Use the release binary (`cargo install --path crates/precc-hook`) rather than a debug build. The release binary runs in ~3ms; a debug build runs in ~480ms due to unoptimized code.
 
 ## Usage
 
@@ -67,6 +70,9 @@ Once installed, PRECC works automatically. Every bash command Claude Code runs p
 # Initialize databases and mine existing session history
 precc init
 precc ingest --all
+
+# Re-mine all sessions from scratch (e.g. after a mining logic update)
+precc ingest --all --force
 
 # View what PRECC has learned
 precc skills list
