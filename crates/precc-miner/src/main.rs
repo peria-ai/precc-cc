@@ -110,6 +110,12 @@ fn run_once() -> Result<()> {
         log(&format!("activations: {} imported from log", imported));
     }
 
+    // Import metrics log (append-log bridge from hook)
+    let metrics_imported = import_metrics_log(&metrics_conn, &data_dir)?;
+    if metrics_imported > 0 {
+        log(&format!("metrics: {} imported from log", metrics_imported));
+    }
+
     // Mine
     let mine_summary = mining::mine_all(&history_conn, false)?;
     log(&format!(
@@ -230,6 +236,12 @@ fn tick(data_dir: &std::path::Path) -> Result<()> {
         log(&format!("activations: {} imported from log", imported));
     }
 
+    // Import metrics log (append-log bridge from hook)
+    let metrics_imported = import_metrics_log(&metrics_conn, data_dir)?;
+    if metrics_imported > 0 {
+        log(&format!("metrics: {} imported from log", metrics_imported));
+    }
+
     // Mine new sessions
     let mine_summary = mining::mine_all(&history_conn, false)?;
 
@@ -322,6 +334,68 @@ fn import_activation_log(
             None => continue,
         };
         let _ = precc_core::skills::record_activation(heuristics_conn, skill_id);
+        count += 1;
+    }
+
+    let _ = std::fs::remove_file(&processing_path);
+    Ok(count)
+}
+
+// =============================================================================
+// Metrics log import
+// =============================================================================
+
+/// Import all pending metrics from the append-log written by precc-hook.
+///
+/// Reads all JSONL lines from `metrics.log`, inserts each into metrics.db,
+/// then atomically renames/removes the log to prevent double-counting.
+///
+/// Returns the number of metric entries imported.
+fn import_metrics_log(
+    metrics_conn: &rusqlite::Connection,
+    data_dir: &std::path::Path,
+) -> Result<usize> {
+    let log_path = data_dir.join("metrics.log");
+
+    if !log_path.exists() {
+        return Ok(0);
+    }
+
+    // Atomically rename so the hook can write a new log concurrently
+    let processing_path = data_dir.join("metrics.log.processing");
+    if let Err(e) = std::fs::rename(&log_path, &processing_path) {
+        log(&format!("metrics: rename skipped: {e}"));
+        return Ok(0);
+    }
+
+    let content = match std::fs::read_to_string(&processing_path) {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = std::fs::remove_file(&processing_path);
+            return Ok(0);
+        }
+    };
+
+    let mut count = 0;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let metric_type = match parsed.get("type").and_then(|v| v.as_str()) {
+            Some(t) => t.to_string(),
+            None => continue,
+        };
+        let value = parsed.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
+
+        let _ = metrics_conn.execute(
+            "INSERT INTO metrics (timestamp, metric_type, value, metadata)
+             VALUES (datetime('now'), ?1, ?2, NULL)",
+            rusqlite::params![metric_type, value],
+        );
         count += 1;
     }
 
@@ -472,6 +546,42 @@ mod tests {
         tick(dir.path()).unwrap();
         assert!(dir.path().join("history.db").exists());
         assert!(dir.path().join("heuristics.db").exists());
+    }
+
+    #[test]
+    fn import_metrics_log_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("metrics.log");
+
+        // Write two entries as the hook would
+        std::fs::write(
+            &log_path,
+            "{\"ts\":1000,\"type\":\"hook_latency\",\"value\":2.93}\n\
+             {\"ts\":1001,\"type\":\"rtk_rewrite\",\"value\":1.0}\n",
+        )
+        .unwrap();
+
+        let metrics_conn = precc_core::db::open_metrics(dir.path()).unwrap();
+        let count = import_metrics_log(&metrics_conn, dir.path()).unwrap();
+        assert_eq!(count, 2);
+
+        // Log file should be gone
+        assert!(!log_path.exists());
+
+        // Both entries should be in the DB
+        let db_count: i64 = metrics_conn
+            .query_row("SELECT COUNT(*) FROM metrics", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(db_count, 2);
+    }
+
+    #[test]
+    fn import_metrics_log_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let metrics_conn = precc_core::db::open_metrics(dir.path()).unwrap();
+        // Should return 0, not error, when file doesn't exist
+        let count = import_metrics_log(&metrics_conn, dir.path()).unwrap();
+        assert_eq!(count, 0);
     }
 
     #[cfg(unix)]

@@ -16,7 +16,8 @@
 //!
 //! Performance notes:
 //! - No subprocess spawns (gdb/rtk checks use PATH scanning)
-//! - No metrics recording in the hot path (deferred to precc-cli report)
+//! - No DB writes in the hot path — metrics appended to metrics.log (O_APPEND)
+//!   and imported into metrics.db by precc-miner on its next tick.
 //! - No builtin skills loading (done by precc init)
 //! - Heuristics DB opened read-only, skipped if file doesn't exist
 //! - Schema init skipped (precc init handles it)
@@ -39,6 +40,8 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
+    let t_start = std::time::Instant::now();
+
     // Stage 1: Parse JSON from stdin
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
@@ -72,6 +75,10 @@ fn run() -> anyhow::Result<()> {
     }
     // If not modified, exit 0 (approve unchanged)
 
+    // Record metrics (after stdout emit — never delays response to Claude)
+    let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+    append_metrics_log(&pipeline, latency_ms);
+
     Ok(())
 }
 
@@ -79,6 +86,9 @@ struct Pipeline {
     original: String,
     command: String,
     reasons: Vec<String>,
+    // Flags set by each stage for metrics reporting
+    had_cd_prepend: bool,
+    had_rtk_rewrite: bool,
 }
 
 impl Pipeline {
@@ -87,6 +97,8 @@ impl Pipeline {
             original: command.clone(),
             command,
             reasons: Vec::new(),
+            had_cd_prepend: false,
+            had_rtk_rewrite: false,
         }
     }
 
@@ -161,6 +173,7 @@ impl Pipeline {
             // Only apply if skills didn't already prepend a cd
             if !self.command.starts_with("cd ") {
                 self.command = rewritten;
+                self.had_cd_prepend = true;
                 self.reasons.push(format!(
                     "cd:{} (conf={:.1})",
                     ctx.marker.as_deref().unwrap_or("?"),
@@ -182,6 +195,7 @@ impl Pipeline {
             } else {
                 format!("{}{}", prefix, rewritten)
             };
+            self.had_rtk_rewrite = true;
             self.reasons.push("rtk-rewrite".to_string());
         }
     }
@@ -222,6 +236,48 @@ fn append_activation_log(skill_id: i64, skill_name: &str, conf: f64) {
             .open(&log_path)
             .and_then(|mut f| f.write_all(line.as_bytes()));
     }
+}
+
+/// Append hook metrics to metrics.log for async import by precc-miner.
+///
+/// Records: hook_latency, cd_prepend (if fired), rtk_rewrite (if fired).
+/// Uses O_APPEND semantics — single write() syscall per entry, atomic.
+/// Fail-open: any error is silently ignored.
+fn append_metrics_log(pipeline: &Pipeline, latency_ms: f64) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let log_path = std::path::Path::new(&home).join(".local/share/precc/metrics.log");
+
+    // Build all lines to write in a single syscall
+    let mut lines = format!(
+        "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3}}}\n",
+        ts, latency_ms
+    );
+    if pipeline.had_cd_prepend {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"cd_prepend\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+    if pipeline.had_rtk_rewrite {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"rtk_rewrite\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| f.write_all(lines.as_bytes()));
 }
 
 /// Split a command into its `cd /path &&` prefix (if any) and the remaining command.
@@ -352,5 +408,24 @@ mod tests {
         p.reasons.push("rtk-rewrite".to_string());
         p.reasons.push("cd:Cargo.toml (conf=0.9)".to_string());
         assert_eq!(p.reason(), "PRECC: rtk-rewrite; cd:Cargo.toml (conf=0.9)");
+    }
+
+    #[test]
+    fn pipeline_flags_default_false() {
+        let p = Pipeline::new("echo hello".to_string());
+        assert!(!p.had_cd_prepend);
+        assert!(!p.had_rtk_rewrite);
+    }
+
+    #[test]
+    fn metrics_log_line_format() {
+        // Verify the JSON line format we write can be parsed back correctly
+        let line = format!(
+            "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3}}}\n",
+            1000u64, 2.93f64
+        );
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"].as_str(), Some("hook_latency"));
+        assert!((parsed["value"].as_f64().unwrap() - 2.93).abs() < 0.001);
     }
 }
