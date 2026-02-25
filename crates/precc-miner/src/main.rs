@@ -133,7 +133,7 @@ fn run_once() -> Result<()> {
         ));
     }
 
-    // Promote
+    // Promote new patterns to candidate skills
     let promo_summary =
         promote::promote_patterns(&history_conn, &heuristics_conn, Some(PROMOTION_THRESHOLD))?;
     log(&format!(
@@ -143,6 +143,18 @@ fn run_once() -> Result<()> {
         promo_summary.already_exists,
         promo_summary.skipped,
     ));
+
+    // Advance skill lifecycle based on activation stats
+    let lifecycle = promote::tick_skill_lifecycle(&heuristics_conn)?;
+    if lifecycle.promoted_to_active > 0
+        || lifecycle.promoted_to_trusted > 0
+        || lifecycle.auto_disabled > 0
+    {
+        log(&format!(
+            "lifecycle: {} → active, {} → trusted, {} disabled",
+            lifecycle.promoted_to_active, lifecycle.promoted_to_trusted, lifecycle.auto_disabled,
+        ));
+    }
 
     log("precc-miner: single pass complete");
     Ok(())
@@ -273,6 +285,18 @@ fn tick(data_dir: &std::path::Path) -> Result<()> {
         ));
     }
 
+    // Advance skill lifecycle based on activation stats
+    let lifecycle = promote::tick_skill_lifecycle(&heuristics_conn)?;
+    if lifecycle.promoted_to_active > 0
+        || lifecycle.promoted_to_trusted > 0
+        || lifecycle.auto_disabled > 0
+    {
+        log(&format!(
+            "lifecycle: {} → active, {} → trusted, {} disabled",
+            lifecycle.promoted_to_active, lifecycle.promoted_to_trusted, lifecycle.auto_disabled,
+        ));
+    }
+
     // Record miner tick metric (best-effort)
     let _ = precc_core::metrics::record(
         &metrics_conn,
@@ -333,7 +357,11 @@ fn import_activation_log(
             Some(id) => id,
             None => continue,
         };
-        let _ = precc_core::skills::record_activation(heuristics_conn, skill_id);
+        if let Err(e) = precc_core::skills::record_activation(heuristics_conn, skill_id) {
+            log(&format!(
+                "activations: record_activation({skill_id}) failed: {e}"
+            ));
+        }
         count += 1;
     }
 

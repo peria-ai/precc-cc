@@ -19,6 +19,131 @@ pub struct PromotionSummary {
     pub skipped: usize,
 }
 
+/// Result of a lifecycle tick.
+#[derive(Debug, Default)]
+pub struct LifecycleSummary {
+    /// Skills promoted from candidate (0.3) to active (0.7).
+    pub promoted_to_active: usize,
+    /// Skills promoted from active (0.7) to trusted (0.9).
+    pub promoted_to_trusted: usize,
+    /// Skills auto-disabled due to high failure rate.
+    pub auto_disabled: usize,
+}
+
+/// Thresholds for the skill confidence lifecycle.
+///
+/// These mirror the values described in ARCHITECTURE.md:
+/// - CANDIDATE (0.3): just created, not yet auto-applied
+/// - ACTIVE    (0.7): auto-applied silently by the hook
+/// - TRUSTED   (0.9): high-confidence, well-validated
+const CONF_ACTIVE: f64 = 0.7;
+const CONF_TRUSTED: f64 = 0.9;
+
+/// Minimum activations before a skill can advance from CANDIDATE → ACTIVE.
+const ACTIVATIONS_FOR_ACTIVE: i64 = 5;
+/// Minimum activations before a skill can advance from ACTIVE → TRUSTED.
+const ACTIVATIONS_FOR_TRUSTED: i64 = 20;
+/// Maximum failure rate (0.0–1.0) before auto-disabling.
+const MAX_FAILURE_RATE: f64 = 0.20;
+/// Minimum failure rate to trigger auto-disable (avoids disabling on 1/1 failures).
+const MIN_ACTIVATIONS_FOR_DISABLE: i64 = 5;
+
+/// Evaluate all mined skills against their activation stats and update confidence levels.
+///
+/// Called by precc-miner on every tick (after `import_activation_log`).
+/// Only affects skills with `source = 'mined'` — built-in skills are never auto-demoted.
+///
+/// Lifecycle transitions:
+/// - `activated >= 5`  → confidence 0.3 → 0.7 (CANDIDATE → ACTIVE, auto-apply enabled)
+/// - `activated >= 20` and failure_rate < 5% → confidence 0.7 → 0.9 (ACTIVE → TRUSTED)
+/// - failure_rate > 20% (with ≥ 5 activations) → disabled = 0 (auto-disabled)
+pub fn tick_skill_lifecycle(conn: &Connection) -> Result<LifecycleSummary> {
+    let mut summary = LifecycleSummary::default();
+
+    // Load all mined skills with their current stats
+    let mut stmt = conn.prepare(
+        "SELECT s.id, sa.confidence, ss.activated, ss.succeeded, ss.failed
+         FROM skills s
+         JOIN skill_actions sa ON sa.skill_id = s.id
+         LEFT JOIN skill_stats ss ON ss.skill_id = s.id
+         WHERE s.source = 'mined' AND s.enabled = 1",
+    )?;
+
+    struct SkillState {
+        id: i64,
+        confidence: f64,
+        activated: i64,
+        failed: i64,
+    }
+
+    let states: Vec<SkillState> = stmt
+        .query_map([], |row| {
+            let activated: i64 = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
+            let _succeeded: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
+            let failed: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            Ok(SkillState {
+                id: row.get(0)?,
+                confidence: row.get(1)?,
+                activated,
+                failed,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let now = crate::skills::chrono_now();
+
+    for state in &states {
+        let failure_rate = if state.activated > 0 {
+            state.failed as f64 / state.activated as f64
+        } else {
+            0.0
+        };
+
+        // Auto-disable: high failure rate with enough data
+        if state.activated >= MIN_ACTIVATIONS_FOR_DISABLE && failure_rate > MAX_FAILURE_RATE {
+            conn.execute(
+                "UPDATE skills SET enabled = 0, updated_at = ?2 WHERE id = ?1",
+                rusqlite::params![state.id, now],
+            )?;
+            summary.auto_disabled += 1;
+            continue;
+        }
+
+        // Determine target confidence based on activation count
+        let target_conf = if state.activated >= ACTIVATIONS_FOR_TRUSTED
+            && failure_rate < 0.05
+            && state.confidence >= CONF_ACTIVE
+            && state.confidence < CONF_TRUSTED
+        {
+            Some(CONF_TRUSTED)
+        } else if state.activated >= ACTIVATIONS_FOR_ACTIVE && state.confidence < CONF_ACTIVE {
+            Some(CONF_ACTIVE)
+        } else {
+            None
+        };
+
+        if let Some(new_conf) = target_conf {
+            conn.execute(
+                "UPDATE skill_actions SET confidence = ?2 WHERE skill_id = ?1",
+                rusqlite::params![state.id, new_conf],
+            )?;
+            conn.execute(
+                "UPDATE skills SET updated_at = ?2 WHERE id = ?1",
+                rusqlite::params![state.id, now],
+            )?;
+
+            if (new_conf - CONF_TRUSTED).abs() < f64::EPSILON {
+                summary.promoted_to_trusted += 1;
+            } else {
+                summary.promoted_to_active += 1;
+            }
+        }
+    }
+
+    Ok(summary)
+}
+
 /// A candidate pattern for promotion.
 #[derive(Debug)]
 struct Candidate {
@@ -230,6 +355,8 @@ mod tests {
     use super::*;
     use crate::db;
 
+    const CONF_CANDIDATE: f64 = 0.3;
+
     fn test_dbs() -> (Connection, Connection) {
         let dir1 = tempfile::tempdir().unwrap();
         let dir2 = tempfile::tempdir().unwrap();
@@ -357,6 +484,180 @@ mod tests {
         assert_eq!(summary.candidates_found, 1);
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.skills_created, 0);
+    }
+
+    fn insert_mined_skill(conn: &Connection, name: &str, confidence: f64) -> i64 {
+        let now = crate::skills::chrono_now();
+        conn.execute(
+            "INSERT INTO skills (name, description, source, priority, created_at, updated_at)
+             VALUES (?1, 'test', 'mined', 200, ?2, ?2)",
+            rusqlite::params![name, now],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO skill_triggers (skill_id, trigger_type, pattern, weight)
+             VALUES (?1, 'command_regex', '^test', 1.0)",
+            [id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skill_actions (skill_id, action_type, template, confidence)
+             VALUES (?1, 'rewrite_command', 'fixed', ?2)",
+            rusqlite::params![id, confidence],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skill_stats (skill_id, activated, succeeded, failed)
+             VALUES (?1, 0, 0, 0)",
+            [id],
+        )
+        .unwrap();
+        id
+    }
+
+    fn set_stats(conn: &Connection, skill_id: i64, activated: i64, failed: i64) {
+        conn.execute(
+            "UPDATE skill_stats SET activated = ?2, failed = ?3 WHERE skill_id = ?1",
+            rusqlite::params![skill_id, activated, failed],
+        )
+        .unwrap();
+    }
+
+    fn get_confidence(conn: &Connection, skill_id: i64) -> f64 {
+        conn.query_row(
+            "SELECT confidence FROM skill_actions WHERE skill_id = ?1",
+            [skill_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn is_enabled(conn: &Connection, skill_id: i64) -> bool {
+        conn.query_row(
+            "SELECT enabled FROM skills WHERE id = ?1",
+            [skill_id],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lifecycle_candidate_to_active() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-promote", CONF_CANDIDATE);
+        set_stats(&heuristics, id, ACTIVATIONS_FOR_ACTIVE, 0);
+
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.promoted_to_active, 1);
+        assert_eq!(summary.promoted_to_trusted, 0);
+        assert!((get_confidence(&heuristics, id) - CONF_ACTIVE).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lifecycle_active_to_trusted() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-trusted", CONF_ACTIVE);
+        set_stats(&heuristics, id, ACTIVATIONS_FOR_TRUSTED, 0);
+
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.promoted_to_trusted, 1);
+        assert!((get_confidence(&heuristics, id) - CONF_TRUSTED).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lifecycle_not_promoted_below_threshold() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-stay", CONF_CANDIDATE);
+        set_stats(&heuristics, id, ACTIVATIONS_FOR_ACTIVE - 1, 0);
+
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.promoted_to_active, 0);
+        assert!((get_confidence(&heuristics, id) - CONF_CANDIDATE).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lifecycle_auto_disable_high_failure_rate() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-disable", CONF_ACTIVE);
+        // 5 activations, 2 failures = 40% failure rate > 20% threshold
+        set_stats(&heuristics, id, MIN_ACTIVATIONS_FOR_DISABLE, 2);
+
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.auto_disabled, 1);
+        assert!(!is_enabled(&heuristics, id));
+    }
+
+    #[test]
+    fn lifecycle_no_disable_below_min_activations() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-nodeisable", CONF_ACTIVE);
+        // Only 2 activations, 2 failures — not enough data to auto-disable
+        set_stats(&heuristics, id, MIN_ACTIVATIONS_FOR_DISABLE - 1, 2);
+
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.auto_disabled, 0);
+        assert!(is_enabled(&heuristics, id));
+    }
+
+    #[test]
+    fn lifecycle_trusted_requires_low_failure_rate() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-no-trusted", CONF_ACTIVE);
+        // 20 activations but 10% failure rate — should NOT reach trusted
+        set_stats(&heuristics, id, ACTIVATIONS_FOR_TRUSTED, 2);
+
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.promoted_to_trusted, 0);
+        assert!((get_confidence(&heuristics, id) - CONF_ACTIVE).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn lifecycle_builtin_skills_untouched() {
+        let (_, heuristics) = test_dbs();
+        let now = crate::skills::chrono_now();
+        // Insert a builtin skill with low confidence (should never happen but let's be safe)
+        heuristics
+            .execute(
+                "INSERT INTO skills (name, description, source, priority, created_at, updated_at)
+                 VALUES ('builtin-test', 'test', 'builtin', 50, ?1, ?1)",
+                [&now],
+            )
+            .unwrap();
+        let id = heuristics.last_insert_rowid();
+        heuristics
+            .execute(
+                "INSERT INTO skill_actions (skill_id, action_type, template, confidence)
+                 VALUES (?1, 'rewrite_command', 'fixed', 0.3)",
+                [id],
+            )
+            .unwrap();
+        heuristics
+            .execute(
+                "INSERT INTO skill_stats (skill_id, activated, succeeded, failed)
+                 VALUES (?1, 100, 0, 100)",
+                [id],
+            )
+            .unwrap();
+
+        // tick_skill_lifecycle only touches 'mined' skills — builtin should be untouched
+        let summary = tick_skill_lifecycle(&heuristics).unwrap();
+        assert_eq!(summary.auto_disabled, 0);
+        assert!(is_enabled(&heuristics, id));
+    }
+
+    #[test]
+    fn lifecycle_idempotent_at_trusted() {
+        let (_, heuristics) = test_dbs();
+        let id = insert_mined_skill(&heuristics, "test-idempotent", CONF_TRUSTED);
+        set_stats(&heuristics, id, 50, 0);
+
+        let s1 = tick_skill_lifecycle(&heuristics).unwrap();
+        let s2 = tick_skill_lifecycle(&heuristics).unwrap();
+        // Already at trusted — no further changes
+        assert_eq!(s1.promoted_to_trusted, 0);
+        assert_eq!(s2.promoted_to_trusted, 0);
+        assert!((get_confidence(&heuristics, id) - CONF_TRUSTED).abs() < f64::EPSILON);
     }
 
     #[test]

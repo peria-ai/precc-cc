@@ -135,12 +135,16 @@ pub fn apply_template(template: &str, original_command: &str, project_root: &str
 
 /// Record that a skill was activated (for stats tracking).
 pub fn record_activation(conn: &Connection, skill_id: i64) -> Result<()> {
+    // Ensure the row exists first (INSERT OR IGNORE — no-op if already present)
     conn.execute(
-        "INSERT INTO skill_stats (skill_id, activated, succeeded, failed, last_used)
-         VALUES (?1, 1, 0, 0, datetime('now'))
-         ON CONFLICT(skill_id) DO UPDATE SET
-           activated = activated + 1,
-           last_used = datetime('now')",
+        "INSERT OR IGNORE INTO skill_stats (skill_id, activated, succeeded, failed, last_used)
+         VALUES (?1, 0, 0, 0, NULL)",
+        [skill_id],
+    )?;
+    // Now increment the counter
+    conn.execute(
+        "UPDATE skill_stats SET activated = activated + 1, last_used = datetime('now')
+         WHERE skill_id = ?1",
         [skill_id],
     )?;
     Ok(())
