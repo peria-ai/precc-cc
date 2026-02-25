@@ -129,6 +129,23 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 
 ## Changelog
 
+### v0.3.0 — Skill Lifecycle & Live Metrics
+
+- **Skill confidence lifecycle** — mined skills auto-promote as they prove useful:
+  - `CANDIDATE (0.3)` → `ACTIVE (0.7)` after 5 activations (hook auto-applies)
+  - `ACTIVE (0.7)` → `TRUSTED (0.9)` after 20 activations with <5% failure rate
+  - Auto-disabled when failure rate exceeds 20% with ≥5 activations
+- **Live hook metrics** — `precc report` now shows real hook latency, CD prepend
+  counts, and RTK rewrite counts from actual usage (previously "no data")
+- **O_APPEND metrics bridge** — hook appends JSONL to `metrics.log` (single
+  syscall, ~10µs); miner atomically imports on each tick with no DB writes in
+  the hot path
+- **Activation tracking fix** — corrected SQL that silently failed to increment
+  `skill_stats.activated`, causing lifecycle promotions never to fire
+- **Investor demo suite** — `demo/demo.sh` (6-section runnable terminal demo),
+  `demo/DEMO_GUIDE.md` (timed presenter script), `demo/PITCH_NARRATIVES.md`
+  (5 audience-specific pitch narratives), `demo/session.jsonl` (synthetic session)
+
 ### v0.2.0 — Security & Distribution
 - **AES-256 database encryption** — all databases encrypted via SQLCipher with a
   machine-bound key derived from HKDF-SHA256; zero user friction, no passphrase

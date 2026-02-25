@@ -181,19 +181,31 @@ CREATE INDEX idx_triggers_pattern ON skill_triggers(pattern);
 CREATE INDEX idx_skills_enabled ON skills(enabled);
 ```
 
-**Skill lifecycle**:
+**Skill lifecycle** (implemented in `promote.rs::tick_skill_lifecycle`):
 ```
-1. DISCOVERY: Miner finds a recurring failure-fix pair (≥3 occurrences)
-2. CANDIDATE: Auto-generates a skill definition, confidence = 0.3
-3. ACTIVE: After 5 successful activations, confidence promoted to 0.7
-4. TRUSTED: After 20 successes with <5% failure rate, confidence = 0.9
-5. DISABLED: If failure rate exceeds 20%, auto-disabled pending review
+1. DISCOVERY:  Miner finds a recurring failure-fix pair (≥3 occurrences)
+2. CANDIDATE:  promote_patterns() creates skill with confidence = 0.3
+               (not auto-applied by hook; shown as suggestion only)
+3. ACTIVE:     tick_skill_lifecycle() promotes to 0.7 after 5 activations
+               (hook auto-applies silently at conf ≥ 0.7)
+4. TRUSTED:    Promoted to 0.9 after 20 activations with <5% failure rate
+5. DISABLED:   Auto-disabled if failure rate exceeds 20% with ≥5 activations
 ```
 
 **Confidence thresholds**:
 - `≥ 0.7` — Auto-apply silently (hook rewrites command)
-- `0.3 - 0.7` — Suggest in hook output but don't auto-apply
-- `< 0.3` — Candidate only, not shown in hook
+- `0.3–0.69` — Candidate; not auto-applied
+- `< 0.3` — Not surfaced
+
+**Activation tracking** (`skill_stats` table):
+- Hook writes `activations.log` (O_APPEND, single syscall, ~10µs) on each skill fire
+- Miner atomically renames log → `activations.log.processing`, imports into `skill_stats`
+- `record_activation()` uses `INSERT OR IGNORE` + `UPDATE` (compatible with all SQLCipher versions)
+
+**Metrics bridge** (`metrics.log` → `metrics.db`):
+- Hook appends one JSONL line per invocation: `{"ts":…,"type":"hook_latency","value":2.93}`
+- Optional lines for `cd_prepend` and `rtk_rewrite` events
+- Miner imports atomically on each tick; `precc report` reads from `metrics.db`
 
 ## Component Architecture
 
@@ -207,7 +219,9 @@ CREATE INDEX idx_skills_enabled ON skills(enabled);
 │                        ├─ Resolve working dir (Pillar 1)    │
 │                        ├─ Check GDB opportunity (Pillar 2)  │
 │                        ├─ RTK rewriting (existing)          │
-│                        └─ Emit modified JSON                │
+│                        ├─ Emit modified JSON to stdout      │
+│                        ├─ Append activations.log (O_APPEND) │
+│                        └─ Append metrics.log    (O_APPEND)  │
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
@@ -223,8 +237,10 @@ CREATE INDEX idx_skills_enabled ON skills(enabled);
 │  precc-miner (background daemon)                            │
 │    ├─ Watch ~/.claude/projects/ for new JSONL               │
 │    ├─ Mine failure-fix pairs → history.db                   │
+│    ├─ Import activations.log → skill_stats (atomic rename)  │
+│    ├─ Import metrics.log → metrics.db (atomic rename)       │
 │    ├─ Promote patterns → skills in heuristics.db            │
-│    └─ Compute skill stats and confidence                    │
+│    └─ Run skill lifecycle: CANDIDATE→ACTIVE→TRUSTED/DISABLED│
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
@@ -242,6 +258,9 @@ CREATE INDEX idx_skills_enabled ON skills(enabled);
 │  Storage                                                     │
 │    ├─ ~/.local/share/precc/history.db     (Pillar 3)        │
 │    ├─ ~/.local/share/precc/heuristics.db  (Pillar 4)        │
+│    ├─ ~/.local/share/precc/metrics.db     (hook metrics)    │
+│    ├─ ~/.local/share/precc/activations.log (O_APPEND bridge)│
+│    ├─ ~/.local/share/precc/metrics.log    (O_APPEND bridge) │
 │    └─ skills/builtin/*.toml               (built-in skills) │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
