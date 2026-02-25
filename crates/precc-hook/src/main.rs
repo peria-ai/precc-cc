@@ -151,8 +151,18 @@ impl Pipeline {
 
         for m in &matches {
             if m.confidence >= AUTO_APPLY_THRESHOLD {
-                // Auto-apply: resolve project root for template
+                // Auto-apply: resolve project root for template.
+                // Skip prepend_cd skills when no better directory is known —
+                // applying `cd CWD && cmd` is a no-op rewrite that adds noise.
                 let project_root = self.resolve_project_root();
+                if m.action_type == "prepend_cd" {
+                    let cwd = std::env::current_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if project_root == cwd || project_root == "." {
+                        break; // No better directory found — skip skill
+                    }
+                }
                 let rewritten = skills::apply_template(&m.template, &self.command, &project_root);
                 self.command = rewritten;
                 self.reasons

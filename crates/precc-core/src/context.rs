@@ -26,6 +26,7 @@ static TOOL_MARKERS: &[(&str, &str)] = &[
     ("next", "package.json"),
     ("make", "Makefile"),
     ("cmake", "CMakeLists.txt"),
+    ("git", ".git"),
     ("go", "go.mod"),
     ("python", "setup.py"),
     ("pip", "setup.py"),
@@ -193,10 +194,18 @@ mod tests {
     }
 
     #[test]
+    fn detect_git_marker() {
+        assert_eq!(detect_marker("git status"), Some(".git"));
+        assert_eq!(detect_marker("git commit -m 'fix'"), Some(".git"));
+        assert_eq!(detect_marker("git push origin main"), Some(".git"));
+        assert_eq!(detect_marker("git log --oneline"), Some(".git"));
+    }
+
+    #[test]
     fn detect_no_marker() {
         assert_eq!(detect_marker("echo hello"), None);
         assert_eq!(detect_marker("ls -la"), None);
-        assert_eq!(detect_marker("git status"), None);
+        assert_eq!(detect_marker("grep foo bar"), None);
     }
 
     #[test]
