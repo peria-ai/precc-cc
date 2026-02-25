@@ -147,6 +147,21 @@ fn run_once() -> Result<()> {
 // =============================================================================
 
 fn run_daemon(args: Args) -> Result<()> {
+    #[cfg(windows)]
+    {
+        eprintln!("precc-miner: daemon mode is not yet supported on Windows.");
+        eprintln!("Use --once to run a single pass.");
+        std::process::exit(1);
+    }
+
+    #[cfg(unix)]
+    {
+        run_daemon_unix(args)
+    }
+}
+
+#[cfg(unix)]
+fn run_daemon_unix(args: Args) -> Result<()> {
     let data_dir = db::data_dir()?;
 
     // PID file management
@@ -315,9 +330,10 @@ fn import_activation_log(
 }
 
 // =============================================================================
-// PID file management
+// PID file management (Unix only)
 // =============================================================================
 
+#[cfg(unix)]
 fn write_pid_file(path: &PathBuf) -> Result<()> {
     let pid = std::process::id();
     std::fs::write(path, pid.to_string())
@@ -325,6 +341,7 @@ fn write_pid_file(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn check_existing_pid(path: &PathBuf) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -354,33 +371,42 @@ fn check_existing_pid(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Check if a process with the given PID is alive.
+/// Check if a process with the given PID is alive (Unix only).
+#[cfg(unix)]
 fn process_alive(pid: u32) -> bool {
-    // On Linux, kill(pid, 0) checks if the process exists without sending a signal
-    // We use /proc which is more portable across Rust targets
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
+    // /proc/{pid} exists on Linux; on macOS we use kill(0) via the std library.
+    #[cfg(target_os = "linux")]
+    {
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On other Unix systems use kill(pid, 0): returns 0 if process exists.
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        ret == 0
+    }
 }
 
 // =============================================================================
-// Signal handling
+// Signal handling (Unix only)
 // =============================================================================
 
-/// Install a handler for SIGINT/SIGTERM.
+#[cfg(unix)]
+static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// Install a handler for SIGINT/SIGTERM (Unix only).
+#[cfg(unix)]
 fn ctrlc_handler<F: Fn() + Send + 'static>(handler: F) {
-    // Use a simple approach: spawn a thread that blocks on a signal
     std::thread::spawn(move || {
-        // Wait for SIGINT or SIGTERM
-        // Since we can't use the `signal-hook` crate without adding it,
-        // we use a simpler approach: set up a flag that the main loop checks
         wait_for_signal();
         handler();
     });
 }
 
-/// Block until SIGINT or SIGTERM is received.
+/// Block until SIGINT or SIGTERM is received (Unix only).
+#[cfg(unix)]
 fn wait_for_signal() {
     unsafe {
-        // Register handlers that set a global flag
         libc::signal(libc::SIGINT, signal_flag as *const () as libc::sighandler_t);
         libc::signal(
             libc::SIGTERM,
@@ -388,14 +414,12 @@ fn wait_for_signal() {
         );
     }
 
-    // Now block until the flag is set
     while !SIGNAL_RECEIVED.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
 
-static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
-
+#[cfg(unix)]
 extern "C" fn signal_flag(_sig: libc::c_int) {
     SIGNAL_RECEIVED.store(true, Ordering::SeqCst);
 }
@@ -428,11 +452,13 @@ mod tests {
         assert_eq!(args.interval, 60);
     }
 
+    #[cfg(unix)]
     #[test]
     fn process_alive_self() {
         assert!(process_alive(std::process::id()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn process_alive_nonexistent() {
         // PID 999999 is almost certainly not running
@@ -448,6 +474,7 @@ mod tests {
         assert!(dir.path().join("heuristics.db").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn pid_file_lifecycle() {
         let dir = tempfile::tempdir().unwrap();
@@ -467,6 +494,7 @@ mod tests {
         assert!(!pid_path.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn pid_file_blocks_duplicate() {
         let dir = tempfile::tempdir().unwrap();

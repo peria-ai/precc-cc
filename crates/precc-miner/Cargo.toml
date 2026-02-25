@@ -8,10 +8,13 @@ description = "Background daemon that mines Claude Code session logs for failure
 [dependencies]
 precc-core = { path = "../precc-core" }
 anyhow.workspace = true
-libc.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+obfstr.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -10,3 +10,4 @@ precc-core = { path = "../precc-core" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+obfstr.workspace = true

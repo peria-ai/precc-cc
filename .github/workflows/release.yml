@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            use_cross: true
+            archive: tar.gz
+
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            use_cross: true
+            archive: tar.gz
+
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            use_cross: false
+            archive: tar.gz
+
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            use_cross: false
+            archive: tar.gz
+
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            use_cross: false
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # ---- macOS: OpenSSL (required by SQLCipher amalgamation) ----
+      - name: Install OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib" >> "$GITHUB_ENV"
+          echo "OPENSSL_INCLUDE_DIR=$(brew --prefix openssl@3)/include" >> "$GITHUB_ENV"
+
+      # ---- Windows: vcpkg OpenSSL static ----
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install openssl:x64-windows-static
+          echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static" >> $env:GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+
+      # ---- Linux cross: install cross ----
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # ---- Build ----
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: |
+          cross build --release \
+            -p precc-hook \
+            -p precc-cli \
+            -p precc-miner \
+            --target ${{ matrix.target }}
+
+      - name: Build (cargo)
+        if: '!matrix.use_cross'
+        run: |
+          cargo build --release \
+            -p precc-hook \
+            -p precc-cli \
+            -p precc-miner \
+            --target ${{ matrix.target }}
+
+      # ---- Package (Linux / macOS) ----
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="precc-${TAG}-${{ matrix.target }}.tar.gz"
+          STAGING="precc-${TAG}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/precc" "$STAGING/"
+          cp "target/${{ matrix.target }}/release/precc-hook" "$STAGING/"
+          cp "target/${{ matrix.target }}/release/precc-miner" "$STAGING/"
+          cp scripts/install.sh "$STAGING/" 2>/dev/null || true
+          cp README.md "$STAGING/" 2>/dev/null || true
+          tar -czf "$ARCHIVE" "$STAGING"
+          echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
+
+      # ---- Package (Windows) ----
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $archive = "precc-$tag-${{ matrix.target }}.zip"
+          $staging = "precc-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\precc.exe" "$staging\"
+          Copy-Item "target\${{ matrix.target }}\release\precc-hook.exe" "$staging\"
+          Copy-Item "target\${{ matrix.target }}\release\precc-miner.exe" "$staging\"
+          if (Test-Path "scripts\install.ps1") {
+            Copy-Item "scripts\install.ps1" "$staging\"
+          }
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" "$staging\"
+          }
+          Compress-Archive -Path "$staging\*" -DestinationPath $archive
+          echo "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # ---- Upload release asset ----
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -85,6 +85,16 @@ fn main() -> Result<()> {
 fn cmd_init() -> Result<()> {
     let data_dir = db::data_dir()?;
 
+    // Migrate any existing unencrypted databases before opening them with a key.
+    for db_name in &["heuristics.db", "history.db", "metrics.db"] {
+        let path = data_dir.join(db_name);
+        match db::migrate_to_encrypted(&path) {
+            Ok(true) => println!("  Migrated {} to AES-256 encryption", db_name),
+            Ok(false) => {}
+            Err(e) => eprintln!("  Warning: could not migrate {}: {e:#}", db_name),
+        }
+    }
+
     // Initialize all three databases
     println!("Initializing databases in {}...", data_dir.display());
 
@@ -96,6 +106,13 @@ fn cmd_init() -> Result<()> {
 
     db::open_metrics(&data_dir).context("failed to initialize metrics.db")?;
     println!("  metrics.db    — OK");
+
+    // Show encryption confirmation (first 4 bytes of the derived key)
+    let key = db::master_key();
+    println!(
+        "  Encryption: AES-256 (machine-bound key, first 4 bytes: {})",
+        &key[..8]
+    );
 
     // Load builtin skills
     let heuristics_conn = db::open_heuristics(&data_dir)?;

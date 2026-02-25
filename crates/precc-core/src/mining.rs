@@ -64,10 +64,7 @@ pub fn mine_session(conn: &Connection, session_path: &Path, force: bool) -> Resu
                 "DELETE FROM events WHERE session_id = (SELECT id FROM sessions WHERE session_id = ?1)",
                 [&session_id],
             )?;
-            conn.execute(
-                "DELETE FROM sessions WHERE session_id = ?1",
-                [&session_id],
-            )?;
+            conn.execute("DELETE FROM sessions WHERE session_id = ?1", [&session_id])?;
         } else {
             return Ok(MineResult::Skipped);
         }
@@ -92,7 +89,10 @@ pub fn mine_session(conn: &Connection, session_path: &Path, force: bool) -> Resu
     let db_session_id = conn.last_insert_rowid();
 
     if events.is_empty() {
-        return Ok(MineResult::Processed { pairs: 0, events: 0 });
+        return Ok(MineResult::Processed {
+            pairs: 0,
+            events: 0,
+        });
     }
 
     // Insert events
