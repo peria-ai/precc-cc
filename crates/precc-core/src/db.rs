@@ -166,6 +166,20 @@ pub fn open_heuristics_readonly(data_dir: &Path) -> Result<Option<Connection>> {
     Ok(Some(conn))
 }
 
+/// Open history.db for read (skipping schema init).
+///
+/// Returns `None` if the DB file doesn't exist yet.
+pub fn open_history_readonly(data_dir: &Path) -> Result<Option<Connection>> {
+    let path = data_dir.join("history.db");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path)
+        .with_context(|| format!("failed to open database: {}", path.display()))?;
+    conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";\n", master_key()))?;
+    Ok(Some(conn))
+}
+
 /// Open or create the history database with schema.
 pub fn open_history(data_dir: &Path) -> Result<Connection> {
     std::fs::create_dir_all(data_dir)?;

@@ -6,11 +6,51 @@
 //!
 //! Performance: Uses string prefix matching instead of regex.
 
+use rusqlite::Connection;
 use std::sync::LazyLock;
 
 /// Repeated failure threshold — if the same command has failed this many
 /// times recently, suggest GDB.
 const REPEATED_FAILURE_THRESHOLD: u32 = 2;
+
+/// Look-back window in seconds for counting recent failures (~24 hours).
+const RECENT_WINDOW_SECS: u64 = 86_400;
+
+/// Count how many times a similar command has appeared as a failure in
+/// `history.db` within the recent time window.
+///
+/// Uses the normalised first word of the command (e.g. "cargo") to group
+/// failures so that `cargo test` and `cargo test --features foo` are counted
+/// together.  Returns 0 on any error (fail-open).
+pub fn count_recent_failures(history_conn: &Connection, command: &str) -> u32 {
+    let first_word = match command.split_whitespace().next() {
+        Some(w) => w,
+        None => return 0,
+    };
+
+    // Build a LIKE pattern: "cargo %" or "cargo" (exact)
+    let pattern = format!("{}%", first_word);
+
+    let cutoff = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(RECENT_WINDOW_SECS);
+
+    // failure_fix_pairs stores the failure command and the timestamp in created_at.
+    // created_at is stored as a Unix timestamp string (from chrono_now()).
+    let count: i64 = history_conn
+        .query_row(
+            "SELECT COUNT(*) FROM failure_fix_pairs
+             WHERE failure_command LIKE ?1
+               AND CAST(created_at AS INTEGER) >= ?2",
+            rusqlite::params![pattern, cutoff as i64],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    count.min(u32::MAX as i64) as u32
+}
 
 /// Check if a command could benefit from GDB-based debugging.
 ///
@@ -151,5 +191,67 @@ mod tests {
     fn no_suggestion_for_non_debuggable() {
         assert_eq!(check_opportunity("cargo build", 5), None);
         assert_eq!(check_opportunity("git status", 10), None);
+    }
+
+    #[test]
+    fn count_recent_failures_empty_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE failure_fix_pairs (
+                id INTEGER PRIMARY KEY,
+                failure_command TEXT NOT NULL,
+                fix_command TEXT NOT NULL,
+                pattern_hash TEXT NOT NULL,
+                failure_output TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                occurrences INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        assert_eq!(count_recent_failures(&conn, "cargo test"), 0);
+    }
+
+    #[test]
+    fn count_recent_failures_with_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE failure_fix_pairs (
+                id INTEGER PRIMARY KEY,
+                failure_command TEXT NOT NULL,
+                fix_command TEXT NOT NULL,
+                pattern_hash TEXT NOT NULL,
+                failure_output TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                occurrences INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        // Insert two recent failures
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        conn.execute(
+            "INSERT INTO failure_fix_pairs
+             (failure_command, fix_command, pattern_hash, failure_output, created_at, updated_at)
+             VALUES ('cargo test --features serde', 'cargo add serde', 'h1', 'err', ?1, ?1)",
+            rusqlite::params![now.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO failure_fix_pairs
+             (failure_command, fix_command, pattern_hash, failure_output, created_at, updated_at)
+             VALUES ('cargo test', 'cargo add tokio', 'h2', 'err', ?1, ?1)",
+            rusqlite::params![now.to_string()],
+        )
+        .unwrap();
+        // Both start with "cargo" — should both be counted
+        assert_eq!(count_recent_failures(&conn, "cargo test"), 2);
+        // "npm" has none
+        assert_eq!(count_recent_failures(&conn, "npm test"), 0);
     }
 }

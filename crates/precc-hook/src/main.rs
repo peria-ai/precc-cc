@@ -65,7 +65,8 @@ fn run() -> anyhow::Result<()> {
     pipeline.run();
 
     // Stage 6: Emit result
-    if pipeline.modified() {
+    // Emit when command was rewritten OR when there's a GDB suggestion to surface.
+    if pipeline.modified() || pipeline.had_gdb_suggestion {
         let tool_input = hook_input
             .get("tool_input")
             .cloned()
@@ -73,7 +74,7 @@ fn run() -> anyhow::Result<()> {
 
         emit_rewrite(&tool_input, &pipeline.command, &pipeline.reason())?;
     }
-    // If not modified, exit 0 (approve unchanged)
+    // If not modified and no suggestions, exit 0 (approve unchanged)
 
     // Record metrics (after stdout emit — never delays response to Claude)
     let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -89,6 +90,7 @@ struct Pipeline {
     // Flags set by each stage for metrics reporting
     had_cd_prepend: bool,
     had_rtk_rewrite: bool,
+    had_gdb_suggestion: bool,
 }
 
 impl Pipeline {
@@ -99,6 +101,7 @@ impl Pipeline {
             reasons: Vec::new(),
             had_cd_prepend: false,
             had_rtk_rewrite: false,
+            had_gdb_suggestion: false,
         }
     }
 
@@ -121,10 +124,8 @@ impl Pipeline {
         // Stage 3: Context resolution (Pillar 1)
         self.stage_context();
 
-        // Stage 4: GDB check (Pillar 2) — currently a no-op
-        // Skipped: recent_failures is always 0 and threshold is 2,
-        // so check_opportunity() always returns None.
-        // Will be re-enabled when history.db query is implemented.
+        // Stage 4: GDB check (Pillar 2)
+        self.stage_gdb();
 
         // Stage 5: RTK rewriting
         self.stage_rtk();
@@ -190,6 +191,38 @@ impl Pipeline {
                     ctx.confidence
                 ));
             }
+        }
+    }
+
+    /// Stage 4: GDB-based debugging suggestion (Pillar 2).
+    ///
+    /// Queries history.db for recent failures of the same command class.
+    /// If the command has failed ≥2 times in the last 24 hours and GDB is
+    /// available, appends a `precc debug` suggestion to the reason string.
+    /// The command itself is never modified — this is advisory only.
+    fn stage_gdb(&mut self) {
+        // Only consider debuggable commands (cargo test/run, ./binary, etc.)
+        // Fast check before opening the DB.
+        if !precc_core::gdb::gdb_available() {
+            return;
+        }
+
+        let data_dir = match db::data_dir() {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let conn = match db::open_history_readonly(&data_dir) {
+            Ok(Some(c)) => c,
+            _ => return,
+        };
+
+        let recent_failures = precc_core::gdb::count_recent_failures(&conn, &self.command);
+
+        if let Some(suggestion) = precc_core::gdb::check_opportunity(&self.command, recent_failures)
+        {
+            self.reasons.push(format!("gdb-hint:{}", suggestion));
+            self.had_gdb_suggestion = true;
         }
     }
 
@@ -279,6 +312,12 @@ fn append_metrics_log(pipeline: &Pipeline, latency_ms: f64) {
     if pipeline.had_rtk_rewrite {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"rtk_rewrite\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+    if pipeline.had_gdb_suggestion {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"gdb_suggestion\",\"value\":1.0}}\n",
             ts
         ));
     }
