@@ -175,6 +175,75 @@ pub fn load_builtin_skills(conn: &Connection, skills_dir: &Path) -> Result<usize
     Ok(loaded)
 }
 
+/// Parse a skill TOML and update an existing skill in heuristics.db.
+///
+/// Replaces the skill's metadata, triggers, and actions in-place.
+/// The skill's stats row (`skill_stats`) is preserved unchanged.
+/// Returns an error if the skill name in the TOML does not match `existing_name`,
+/// or if the skill does not exist.
+pub fn update_skill_toml(conn: &Connection, existing_name: &str, toml_content: &str) -> Result<()> {
+    let doc: SkillDoc = toml::from_str(toml_content)?;
+
+    if doc.skill.name != existing_name {
+        anyhow::bail!(
+            "skill name in TOML ({:?}) does not match existing name ({:?}); \
+             rename is not supported via edit",
+            doc.skill.name,
+            existing_name
+        );
+    }
+
+    let skill_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM skills WHERE name = ?1",
+            [existing_name],
+            |r| r.get(0),
+        )
+        .ok();
+
+    let skill_id = match skill_id {
+        Some(id) => id,
+        None => anyhow::bail!("skill '{}' not found", existing_name),
+    };
+
+    let now = chrono_now();
+
+    // Update skill metadata
+    conn.execute(
+        "UPDATE skills SET description = ?2, source = ?3, priority = ?4, updated_at = ?5
+         WHERE id = ?1",
+        rusqlite::params![
+            skill_id,
+            doc.skill.description,
+            doc.skill.source,
+            doc.skill.priority,
+            now
+        ],
+    )?;
+
+    // Replace triggers
+    conn.execute("DELETE FROM skill_triggers WHERE skill_id = ?1", [skill_id])?;
+    for trigger in &doc.triggers {
+        conn.execute(
+            "INSERT INTO skill_triggers (skill_id, trigger_type, pattern, weight)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![skill_id, trigger.r#type, trigger.pattern, trigger.weight],
+        )?;
+    }
+
+    // Replace actions
+    conn.execute("DELETE FROM skill_actions WHERE skill_id = ?1", [skill_id])?;
+    for action in &doc.actions {
+        conn.execute(
+            "INSERT INTO skill_actions (skill_id, action_type, template, confidence)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![skill_id, action.r#type, action.template, action.confidence],
+        )?;
+    }
+
+    Ok(())
+}
+
 /// Parse a skill TOML and insert into heuristics.db.
 /// Returns true if a new skill was inserted, false if it already existed.
 fn load_skill_toml(conn: &Connection, toml_content: &str) -> Result<bool> {
@@ -413,5 +482,157 @@ confidence = 0.9
         let conn = test_db();
         let matches = find_matches(&conn, "echo hello", 0.0).unwrap();
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn update_skill_toml_changes_description() {
+        let conn = test_db();
+        let original = r#"
+[skill]
+name = "my-skill"
+description = "original description"
+source = "mined"
+priority = 100
+
+[[triggers]]
+type = "command_regex"
+pattern = "^cargo"
+weight = 1.0
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.5
+"#;
+        load_skill_toml(&conn, original).unwrap();
+
+        let updated = r#"
+[skill]
+name = "my-skill"
+description = "updated description"
+source = "mined"
+priority = 200
+
+[[triggers]]
+type = "command_regex"
+pattern = "^cargo\\s+build"
+weight = 0.9
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.7
+"#;
+        update_skill_toml(&conn, "my-skill", updated).unwrap();
+
+        // Verify description and priority changed
+        let (desc, pri): (String, i64) = conn
+            .query_row(
+                "SELECT description, priority FROM skills WHERE name = 'my-skill'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(desc, "updated description");
+        assert_eq!(pri, 200);
+
+        // Verify trigger was replaced
+        let trigger_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM skill_triggers WHERE skill_id = \
+                 (SELECT id FROM skills WHERE name = 'my-skill')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(trigger_count, 1);
+
+        // Verify action confidence updated
+        let conf: f64 = conn
+            .query_row(
+                "SELECT confidence FROM skill_actions WHERE skill_id = \
+                 (SELECT id FROM skills WHERE name = 'my-skill')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((conf - 0.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn update_skill_toml_rejects_name_change() {
+        let conn = test_db();
+        let original = r#"
+[skill]
+name = "orig-skill"
+description = "desc"
+source = "mined"
+priority = 100
+"#;
+        load_skill_toml(&conn, original).unwrap();
+
+        let renamed = r#"
+[skill]
+name = "renamed-skill"
+description = "desc"
+source = "mined"
+priority = 100
+"#;
+        let result = update_skill_toml(&conn, "orig-skill", renamed);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("rename is not supported"));
+    }
+
+    #[test]
+    fn update_skill_toml_preserves_stats() {
+        let conn = test_db();
+        let toml = r#"
+[skill]
+name = "stats-skill"
+description = "desc"
+source = "mined"
+priority = 100
+
+[[triggers]]
+type = "command_regex"
+pattern = "^npm"
+weight = 1.0
+
+[[actions]]
+type = "prepend_cd"
+template = "cd {{project_root}} && {{original_command}}"
+confidence = 0.5
+"#;
+        load_skill_toml(&conn, toml).unwrap();
+
+        // Manually bump activation count
+        let skill_id: i64 = conn
+            .query_row(
+                "SELECT id FROM skills WHERE name = 'stats-skill'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE skill_stats SET activated = 7 WHERE skill_id = ?1",
+            [skill_id],
+        )
+        .unwrap();
+
+        // Update the skill
+        update_skill_toml(&conn, "stats-skill", toml).unwrap();
+
+        // Stats should be preserved
+        let activated: i64 = conn
+            .query_row(
+                "SELECT activated FROM skill_stats WHERE skill_id = ?1",
+                [skill_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(activated, 7);
     }
 }

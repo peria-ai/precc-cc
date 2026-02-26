@@ -3,13 +3,15 @@
 //! Subcommands:
 //! - `precc init` — Setup hook and databases
 //! - `precc ingest [file|--all]` — Mine session logs for failure patterns
-//! - `precc skills [list|show]` — Manage automation skills
+//! - `precc skills [list|show|export|edit]` — Manage automation skills
 //! - `precc debug <binary> [args]` — GDB-based debugging helper
 //! - `precc report` — Analytics dashboard
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use precc_core::{db, gdb, metrics, mining, rtk, skills};
+#[allow(unused_imports)] // needed for writeln! on impl Write params
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(name = "precc", about = "Predictive Error Correction for Claude Code")]
@@ -59,6 +61,8 @@ enum SkillsAction {
     Show { name: String },
     /// Export a skill to TOML format (stdout)
     Export { name: String },
+    /// Edit a skill's triggers/actions in $EDITOR and reimport on save
+    Edit { name: String },
 }
 
 fn main() -> Result<()> {
@@ -261,6 +265,7 @@ fn cmd_skills(action: Option<SkillsAction>) -> Result<()> {
         Some(SkillsAction::List) | None => cmd_skills_list(&conn),
         Some(SkillsAction::Show { name }) => cmd_skills_show(&conn, &name),
         Some(SkillsAction::Export { name }) => cmd_skills_export(&conn, &name),
+        Some(SkillsAction::Edit { name }) => cmd_skills_edit(&conn, &name),
     }
 }
 
@@ -430,7 +435,76 @@ fn cmd_skills_show(conn: &rusqlite::Connection, name: &str) -> Result<()> {
 }
 
 fn cmd_skills_export(conn: &rusqlite::Connection, name: &str) -> Result<()> {
-    // Fetch skill metadata
+    write_skill_toml(conn, name, &mut std::io::stdout())
+}
+
+fn cmd_skills_edit(conn: &rusqlite::Connection, name: &str) -> Result<()> {
+    // Verify the skill exists before opening an editor
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM skills WHERE name = ?1",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+    if !exists {
+        bail!("skill '{}' not found", name);
+    }
+
+    // Write current skill TOML to a temp file
+    let tmp_path = std::env::temp_dir().join(format!("precc-skill-{}.toml", name));
+    {
+        // Reuse export logic by capturing its output into a string
+        let mut buf = Vec::new();
+        write_skill_toml(conn, name, &mut buf)?;
+        std::fs::write(&tmp_path, &buf)
+            .with_context(|| format!("failed to write temp file {}", tmp_path.display()))?;
+    }
+
+    let original =
+        std::fs::read_to_string(&tmp_path).context("failed to read temp file before edit")?;
+
+    // Launch $EDITOR (fallback: vi)
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    let status = std::process::Command::new(&editor)
+        .arg(&tmp_path)
+        .status()
+        .with_context(|| format!("failed to launch editor '{editor}'"))?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp_path);
+        bail!("editor exited with non-zero status — no changes saved");
+    }
+
+    let edited =
+        std::fs::read_to_string(&tmp_path).context("failed to read temp file after edit")?;
+    let _ = std::fs::remove_file(&tmp_path);
+
+    if edited == original {
+        println!("No changes detected — skill '{}' unchanged.", name);
+        return Ok(());
+    }
+
+    // Validate TOML parses before writing to DB
+    toml::from_str::<toml::Value>(&edited).context("edited file is not valid TOML")?;
+
+    // Update skill in DB
+    skills::update_skill_toml(conn, name, &edited)
+        .with_context(|| format!("failed to update skill '{name}'"))?;
+
+    println!("Skill '{}' updated.", name);
+    Ok(())
+}
+
+/// Render a skill's current DB state as TOML bytes (shared by export and edit).
+fn write_skill_toml(
+    conn: &rusqlite::Connection,
+    name: &str,
+    out: &mut impl std::io::Write,
+) -> Result<()> {
     let row: Option<(i64, String, String, String, bool, i64)> = conn
         .query_row(
             "SELECT id, name, description, source, enabled, priority
@@ -454,7 +528,6 @@ fn cmd_skills_export(conn: &rusqlite::Connection, name: &str) -> Result<()> {
         None => bail!("skill '{}' not found", name),
     };
 
-    // Fetch triggers
     let mut stmt = conn.prepare(
         "SELECT trigger_type, pattern, weight FROM skill_triggers WHERE skill_id = ?1 ORDER BY id",
     )?;
@@ -463,7 +536,6 @@ fn cmd_skills_export(conn: &rusqlite::Connection, name: &str) -> Result<()> {
         .filter_map(Result::ok)
         .collect();
 
-    // Fetch actions
     let mut stmt = conn.prepare(
         "SELECT action_type, template, confidence FROM skill_actions WHERE skill_id = ?1 ORDER BY id",
     )?;
@@ -472,33 +544,30 @@ fn cmd_skills_export(conn: &rusqlite::Connection, name: &str) -> Result<()> {
         .filter_map(Result::ok)
         .collect();
 
-    // Render TOML matching the builtin skill format
-    println!("[skill]");
-    println!("name = {:?}", skill_name);
-    println!("description = {:?}", description);
-    println!("source = {:?}", source);
-    println!("priority = {}", priority);
+    writeln!(out, "[skill]")?;
+    writeln!(out, "name = {:?}", skill_name)?;
+    writeln!(out, "description = {:?}", description)?;
+    writeln!(out, "source = {:?}", source)?;
+    writeln!(out, "priority = {}", priority)?;
 
     for (ttype, pattern, weight) in &triggers {
-        println!();
-        println!("[[triggers]]");
-        println!("type = {:?}", ttype);
-        // Patterns are stored as plain strings; in TOML they need proper escaping.
-        // Use single-quoted (literal) TOML strings when the pattern contains backslashes.
+        writeln!(out)?;
+        writeln!(out, "[[triggers]]")?;
+        writeln!(out, "type = {:?}", ttype)?;
         if pattern.contains('\\') {
-            println!("pattern = '{}'", pattern);
+            writeln!(out, "pattern = '{}'", pattern)?;
         } else {
-            println!("pattern = {:?}", pattern);
+            writeln!(out, "pattern = {:?}", pattern)?;
         }
-        println!("weight = {}", weight);
+        writeln!(out, "weight = {}", weight)?;
     }
 
     for (atype, template, confidence) in &actions {
-        println!();
-        println!("[[actions]]");
-        println!("type = {:?}", atype);
-        println!("template = {:?}", template);
-        println!("confidence = {}", confidence);
+        writeln!(out)?;
+        writeln!(out, "[[actions]]")?;
+        writeln!(out, "type = {:?}", atype)?;
+        writeln!(out, "template = {:?}", template)?;
+        writeln!(out, "confidence = {}", confidence)?;
     }
 
     Ok(())
