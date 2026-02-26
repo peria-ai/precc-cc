@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
@@ -191,147 +192,131 @@ fn collect_jsonl_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<
 ///
 /// Merges consecutive tool_use + tool_result pairs into single events
 /// so each event has both the command and its output/exit status.
+/// Extract Bash (and Edit/Write) tool events from JSONL session content.
+///
+/// Uses `tool_use_id` / `id` matching to correctly pair tool_use blocks with
+/// their tool_result blocks regardless of interleaved non-Bash results.  This
+/// handles both the classic top-level session format and the subagent format
+/// where Glob/Read/Grep results appear between Bash tool_use and tool_result.
 fn extract_tool_events(content: &str) -> Vec<ToolEvent> {
-    let mut raw_events = Vec::new();
+    // First pass: collect every tool_use block we care about, keyed by its id.
+    // Value: (tool_name, command_or_path, insertion_order)
+    let mut pending: HashMap<String, (String, String, usize)> = HashMap::new();
+    // Second pass accumulator: completed events in document order.
+    // We store (order_key, ToolEvent) and sort at the end.
+    let mut completed: Vec<(usize, ToolEvent)> = Vec::new();
+    let mut order = 0usize;
 
     for line in content.lines() {
         if line.trim().is_empty() {
             continue;
         }
-
         let parsed: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => continue,
         };
+        let msg = match parsed.get("message") {
+            Some(m) => m,
+            None => continue,
+        };
+        let blocks = match msg.get("content").and_then(|c| c.as_array()) {
+            Some(arr) => arr,
+            None => continue,
+        };
 
-        // Claude Code JSONL has assistant messages with tool_use content blocks
-        // and tool results in subsequent user messages
-        if let Some(msg) = parsed.get("message") {
-            if let Some(content) = msg.get("content") {
-                if let Some(arr) = content.as_array() {
-                    for block in arr {
-                        if let Some(event) = extract_from_content_block(block) {
-                            raw_events.push(event);
-                        }
+        for block in blocks {
+            let btype = match block.get("type").and_then(|t| t.as_str()) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            if btype == "tool_use" {
+                let tool_name = match block.get("name").and_then(|n| n.as_str()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let id = match block.get("id").and_then(|i| i.as_str()) {
+                    Some(i) => i.to_string(),
+                    None => continue,
+                };
+                let input = match block.get("input") {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                if tool_name == "Bash" {
+                    if let Some(cmd) = input.get("command").and_then(|c| c.as_str()) {
+                        order += 1;
+                        pending.insert(id, ("Bash".to_string(), cmd.to_string(), order));
+                    }
+                } else if tool_name == "Edit" || tool_name == "Write" {
+                    if let Some(path) = input.get("file_path").and_then(|p| p.as_str()) {
+                        order += 1;
+                        pending.insert(id, (tool_name.to_string(), path.to_string(), order));
+                    }
+                }
+            } else if btype == "tool_result" {
+                let tool_use_id = match block.get("tool_use_id").and_then(|i| i.as_str()) {
+                    Some(i) => i.to_string(),
+                    None => continue,
+                };
+
+                if let Some((tool_name, command, seq)) = pending.remove(&tool_use_id) {
+                    if tool_name == "Bash" {
+                        // Extract output text
+                        let raw_content = block.get("content");
+                        let text = match raw_content {
+                            Some(c) if c.is_string() => c.as_str().unwrap_or("").to_string(),
+                            Some(c) if c.is_array() => c
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            _ => String::new(),
+                        };
+
+                        let is_error =
+                            block.get("is_error").and_then(|e| e.as_bool()) == Some(true);
+                        let exit_code = if is_error {
+                            extract_exit_code(&text).or(Some(1))
+                        } else {
+                            extract_exit_code(&text)
+                        };
+                        let is_failure = exit_code.map(|c| c != 0).unwrap_or(false);
+
+                        completed.push((
+                            seq,
+                            ToolEvent {
+                                tool: "Bash".to_string(),
+                                command: Some(command),
+                                output: Some(text),
+                                exit_code,
+                                is_failure,
+                            },
+                        ));
+                    } else {
+                        // Edit / Write — no output needed, just record the file path
+                        completed.push((
+                            seq,
+                            ToolEvent {
+                                tool: tool_name,
+                                command: Some(command),
+                                output: None,
+                                exit_code: None,
+                                is_failure: false,
+                            },
+                        ));
                     }
                 }
             }
         }
     }
 
-    // Merge consecutive tool_use (has command, no output) with tool_result
-    // (has output, no command) into single events.
-    merge_tool_events(raw_events)
-}
-
-/// Merge consecutive tool_use + tool_result events.
-/// A tool_use event (command set, output None) followed by a tool_result
-/// event (command None, output set) are combined into one event.
-fn merge_tool_events(raw: Vec<ToolEvent>) -> Vec<ToolEvent> {
-    let mut merged = Vec::new();
-    let mut i = 0;
-
-    while i < raw.len() {
-        let event = &raw[i];
-
-        // If this is a tool_use (has command, no output) and next is a tool_result
-        // (no command, has output) for the same tool, merge them.
-        if event.command.is_some() && event.output.is_none() && i + 1 < raw.len() {
-            let next = &raw[i + 1];
-            if next.command.is_none() && next.output.is_some() && next.tool == event.tool {
-                merged.push(ToolEvent {
-                    tool: event.tool.clone(),
-                    command: event.command.clone(),
-                    output: next.output.clone(),
-                    exit_code: next.exit_code,
-                    is_failure: next.is_failure,
-                });
-                i += 2;
-                continue;
-            }
-        }
-
-        merged.push(event.clone());
-        i += 1;
-    }
-
-    merged
-}
-
-fn extract_from_content_block(block: &serde_json::Value) -> Option<ToolEvent> {
-    let block_type = block.get("type")?.as_str()?;
-
-    if block_type == "tool_use" {
-        let tool_name = block.get("name")?.as_str()?;
-        let input = block.get("input")?;
-
-        if tool_name == "Bash" {
-            let command = input.get("command")?.as_str()?.to_string();
-            return Some(ToolEvent {
-                tool: "Bash".to_string(),
-                command: Some(command),
-                output: None,
-                exit_code: None,
-                is_failure: false,
-            });
-        }
-
-        if tool_name == "Edit" || tool_name == "Write" {
-            let file_path = input
-                .get("file_path")
-                .and_then(|f| f.as_str())
-                .unwrap_or("")
-                .to_string();
-            return Some(ToolEvent {
-                tool: tool_name.to_string(),
-                command: Some(file_path),
-                output: None,
-                exit_code: None,
-                is_failure: false,
-            });
-        }
-    }
-
-    if block_type == "tool_result" {
-        return extract_from_tool_result(block);
-    }
-
-    None
-}
-
-fn extract_from_tool_result(block: &serde_json::Value) -> Option<ToolEvent> {
-    let content = block.get("content")?;
-    let text = if let Some(s) = content.as_str() {
-        s.to_string()
-    } else if let Some(arr) = content.as_array() {
-        arr.iter()
-            .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        return None;
-    };
-
-    // Check for exit code indicators in the output.
-    // Claude Code formats: "Exit code: N" or "Exit code N" (both seen in practice).
-    let is_error = block.get("is_error").and_then(|e| e.as_bool()) == Some(true);
-
-    let exit_code = if is_error {
-        // Try to extract specific exit code from text
-        extract_exit_code(&text).or(Some(1))
-    } else {
-        extract_exit_code(&text)
-    };
-
-    let is_failure = exit_code.map(|c| c != 0).unwrap_or(false);
-
-    Some(ToolEvent {
-        tool: "Bash".to_string(),
-        command: None, // tool_result doesn't repeat the command
-        output: Some(text),
-        exit_code,
-        is_failure,
-    })
+    // Emit in document order (by insertion sequence number).
+    completed.sort_by_key(|(seq, _)| *seq);
+    completed.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Extract exit code from text. Handles both "Exit code: N" and "Exit code N".
@@ -891,53 +876,28 @@ mod tests {
 
     #[test]
     fn merge_tool_use_and_result() {
-        let raw = vec![
-            ToolEvent {
-                tool: "Bash".to_string(),
-                command: Some("cargo build".to_string()),
-                output: None,
-                exit_code: None,
-                is_failure: false,
-            },
-            ToolEvent {
-                tool: "Bash".to_string(),
-                command: None,
-                output: Some("Exit code 1\nerror".to_string()),
-                exit_code: Some(1),
-                is_failure: true,
-            },
-        ];
-
-        let merged = merge_tool_events(raw);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].command.as_deref(), Some("cargo build"));
-        assert!(merged[0].output.is_some());
-        assert_eq!(merged[0].exit_code, Some(1));
-        assert!(merged[0].is_failure);
+        // Verify tool_use_id matching: tool_result is paired with its Bash tool_use
+        // even when interleaved with other tool results.
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_bash","name":"Bash","input":{"command":"cargo build"}}]}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"tu_bash","type":"tool_result","content":"Exit code 1\nerror","is_error":true}]}}"#;
+        let events = extract_tool_events(jsonl);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].command.as_deref(), Some("cargo build"));
+        assert!(events[0].output.is_some());
+        assert_eq!(events[0].exit_code, Some(1));
+        assert!(events[0].is_failure);
     }
 
     #[test]
     fn merge_preserves_unmatched_events() {
-        let raw = vec![
-            ToolEvent {
-                tool: "Bash".to_string(),
-                command: Some("cargo build".to_string()),
-                output: None,
-                exit_code: None,
-                is_failure: false,
-            },
-            // Next event is a different tool — should NOT merge
-            ToolEvent {
-                tool: "Edit".to_string(),
-                command: Some("src/main.rs".to_string()),
-                output: None,
-                exit_code: None,
-                is_failure: false,
-            },
-        ];
-
-        let merged = merge_tool_events(raw);
-        assert_eq!(merged.len(), 2);
+        // Bash tool_use with no matching tool_result (e.g. truncated session) should be dropped.
+        // Edit/Write tool_use with result should still appear.
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_bash","name":"Bash","input":{"command":"cargo build"}},{"type":"tool_use","id":"tu_edit","name":"Edit","input":{"file_path":"src/main.rs","old_string":"x","new_string":"y"}}]}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"tu_edit","type":"tool_result","content":"File edited"}]}}"#;
+        let events = extract_tool_events(jsonl);
+        // Only the Edit event is fully paired; the Bash has no result so is dropped.
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tool, "Edit");
     }
 
     #[test]
