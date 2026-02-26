@@ -57,6 +57,8 @@ enum SkillsAction {
     List,
     /// Show details of a skill
     Show { name: String },
+    /// Export a skill to TOML format (stdout)
+    Export { name: String },
 }
 
 fn main() -> Result<()> {
@@ -258,6 +260,7 @@ fn cmd_skills(action: Option<SkillsAction>) -> Result<()> {
     match action {
         Some(SkillsAction::List) | None => cmd_skills_list(&conn),
         Some(SkillsAction::Show { name }) => cmd_skills_show(&conn, &name),
+        Some(SkillsAction::Export { name }) => cmd_skills_export(&conn, &name),
     }
 }
 
@@ -421,6 +424,81 @@ fn cmd_skills_show(conn: &rusqlite::Connection, name: &str) -> Result<()> {
     println!("    Failed:    {}", row.failed);
     if let Some(last) = &row.last_used {
         println!("    Last used: {}", last);
+    }
+
+    Ok(())
+}
+
+fn cmd_skills_export(conn: &rusqlite::Connection, name: &str) -> Result<()> {
+    // Fetch skill metadata
+    let row: Option<(i64, String, String, String, bool, i64)> = conn
+        .query_row(
+            "SELECT id, name, description, source, enabled, priority
+             FROM skills WHERE name = ?1",
+            [name],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .ok();
+
+    let (skill_id, skill_name, description, source, _enabled, priority) = match row {
+        Some(r) => r,
+        None => bail!("skill '{}' not found", name),
+    };
+
+    // Fetch triggers
+    let mut stmt = conn.prepare(
+        "SELECT trigger_type, pattern, weight FROM skill_triggers WHERE skill_id = ?1 ORDER BY id",
+    )?;
+    let triggers: Vec<(String, String, f64)> = stmt
+        .query_map([skill_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .filter_map(Result::ok)
+        .collect();
+
+    // Fetch actions
+    let mut stmt = conn.prepare(
+        "SELECT action_type, template, confidence FROM skill_actions WHERE skill_id = ?1 ORDER BY id",
+    )?;
+    let actions: Vec<(String, String, f64)> = stmt
+        .query_map([skill_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .filter_map(Result::ok)
+        .collect();
+
+    // Render TOML matching the builtin skill format
+    println!("[skill]");
+    println!("name = {:?}", skill_name);
+    println!("description = {:?}", description);
+    println!("source = {:?}", source);
+    println!("priority = {}", priority);
+
+    for (ttype, pattern, weight) in &triggers {
+        println!();
+        println!("[[triggers]]");
+        println!("type = {:?}", ttype);
+        // Patterns are stored as plain strings; in TOML they need proper escaping.
+        // Use single-quoted (literal) TOML strings when the pattern contains backslashes.
+        if pattern.contains('\\') {
+            println!("pattern = '{}'", pattern);
+        } else {
+            println!("pattern = {:?}", pattern);
+        }
+        println!("weight = {}", weight);
+    }
+
+    for (atype, template, confidence) in &actions {
+        println!();
+        println!("[[actions]]");
+        println!("type = {:?}", atype);
+        println!("template = {:?}", template);
+        println!("confidence = {}", confidence);
     }
 
     Ok(())
