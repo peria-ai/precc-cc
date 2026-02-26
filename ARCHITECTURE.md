@@ -50,22 +50,31 @@ This costs 4+ tool calls per debug cycle, often repeated multiple times.
 
 **Solution**: Generate `.gdbinit` scripts dynamically via `precc debug <binary> [args]` CLI command. GDB can set breakpoints, print variables, and inspect state in a single command — replacing the entire edit-compile-read-edit cycle.
 
-**Implementation**:
+**Implementation — hook advisory (stage 4)**:
 ```
-precc debug target/debug/myapp --args foo bar
-  1. Scan recent compiler errors / test failures from history.db
-  2. Identify likely crash points or assertion failures
-  3. Generate .gdbinit with:
-     - Breakpoints at suspected failure locations
-     - Variable watches for relevant state
-     - Conditional breakpoints for loop-related bugs
-  4. Launch: gdb -batch -x .gdbinit target/debug/myapp foo bar
-  5. Parse GDB output into structured report
+gdb.rs::count_recent_failures(history_conn, command)
+  1. Extract first word of command as prefix (e.g. "cargo")
+  2. Query: COUNT(*) FROM failure_fix_pairs
+            WHERE failure_command LIKE 'cargo%'
+              AND CAST(created_at AS INTEGER) >= now - 86400
+  3. If count >= REPEATED_FAILURE_THRESHOLD (2):
+       check_opportunity() returns suggestion string
+       Hook appends "gdb-hint:<msg>" to permissionDecisionReason
+       Claude sees: "Consider: precc debug target/debug/<binary>"
 ```
 
-**Supported debuggers**: GDB (Rust, C, C++), LLDB (macOS fallback), Node.js `--inspect` (JavaScript/TypeScript)
+**Implementation — `precc debug` CLI**:
+```
+precc debug target/debug/myapp [args]
+  1. Generate .gdbinit-precc with Rust/C panic breakpoints,
+     hook-stop backtrace, and `run` command
+  2. Launch: gdb -x .gdbinit-precc --args target/debug/myapp [args]
+  3. Clean up temp file on exit
+```
 
-**Token savings**: 4 tool calls (edit + compile + run + edit) reduced to 1 tool call (`precc debug`).
+**Supported debuggers**: GDB (Rust, C, C++). GDB availability checked via PATH scan (no subprocess).
+
+**Token savings**: hook advisory surfaces at 0 extra tool calls; `precc debug` reduces 4-call debug cycle to 1.
 
 ### Pillar 3: Failure Pattern Learning
 
@@ -226,11 +235,13 @@ CREATE INDEX idx_skills_enabled ON skills(enabled);
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  precc-cli (user-facing commands)                           │
-│    ├─ precc ingest [file|--all]     Mine sessions           │
-│    ├─ precc skills [list|show|edit] Manage skills           │
-│    ├─ precc debug <binary> [args]   GDB debug helper        │
-│    ├─ precc report                  Analytics dashboard     │
-│    └─ precc init                    Setup hook + DBs        │
+│    ├─ precc ingest [file|--all]          Mine sessions      │
+│    ├─ precc skills list|show             Inspect skills     │
+│    ├─ precc skills export <name>         Dump skill as TOML │
+│    ├─ precc skills edit   <name>         Edit in $EDITOR    │
+│    ├─ precc debug <binary> [args]        GDB debug helper   │
+│    ├─ precc report                       Analytics dashboard│
+│    └─ precc init                         Setup hook + DBs   │
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
@@ -288,18 +299,22 @@ Input: JSON on stdin (Claude Code PreToolUse:Bash event)
   │     If CWD is wrong: prepend `cd /correct/path &&`
   │
   ├─ 4. GDB CHECK (Pillar 2)
-  │     If command matches debug pattern (cargo test, ./binary):
-  │       Check if recent failures suggest GDB would help
-  │       If so: suggest `precc debug` alternative
+  │     If command is debuggable (cargo test/run, ./binary) AND gdb on PATH:
+  │       Open history.db read-only (skip if absent)
+  │       COUNT failure_fix_pairs WHERE failure_command LIKE 'cmd%'
+  │         AND created_at >= now - 86400s
+  │       If count ≥ 2: append gdb-hint to reason; set had_gdb_suggestion
+  │       Command is NEVER modified — advisory only
   │
   ├─ 5. RTK REWRITING (existing functionality)
   │     Apply rtk command rewrites (git → rtk git, etc.)
   │
   └─ 6. EMIT RESULT
-        Output JSON with:
-          - updatedInput (modified command)
+        Emit JSON when command was modified OR had_gdb_suggestion is set
+        Output fields:
+          - updatedInput (command, possibly rewritten)
           - permissionDecision: "allow"
-          - permissionDecisionReason: human-readable explanation
+          - permissionDecisionReason: "PRECC: <stage>; <stage>; …"
 
 Output: JSON on stdout
 ```

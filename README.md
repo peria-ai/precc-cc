@@ -82,6 +82,9 @@ precc ingest --all --force
 
 # View what PRECC has learned
 precc skills list
+precc skills show <name>    # full trigger/action detail
+precc skills export <name>  # dump as TOML (for sharing/backup)
+precc skills edit <name>    # open in $EDITOR and reimport on save
 
 # View savings report
 precc report
@@ -128,6 +131,23 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 | **Hook latency** | **2.93ms avg (1.77ms overhead)** |
 
 ## Changelog
+
+### v0.4.0 — Skills Management & GDB Pillar
+
+- **`precc skills export <name>`** — export any skill to TOML format on stdout,
+  matching the `skills/builtin/*.toml` file format; enables sharing between
+  machines and pull-request contributions of mined skills
+- **`precc skills edit <name>`** — open a skill in `$EDITOR` as TOML, validates
+  syntax, reimports on save; skill stats (activation counts) are preserved;
+  name renames rejected with a clear error
+- **Git wrong-dir skill** — new `git-wrong-dir` builtin covers 20+ git
+  subcommands; `context.rs` now maps `git` → `.git` for Pillar 1 cd-prepend
+- **Prepend-cd guard** — hook no longer applies a `cd CWD && cmd` no-op rewrite
+  when no better project directory is found (was silent wrong behaviour)
+- **GDB Pillar 2 re-enabled** — hook now queries `history.db` for recent
+  failures of the same command class; when ≥2 failures in the last 24 hours,
+  surfaces `"Consider: precc debug …"` in `permissionDecisionReason` so
+  Claude sees the advisory; records `gdb_suggestion` metric for `precc report`
 
 ### v0.3.0 — Skill Lifecycle & Live Metrics
 
