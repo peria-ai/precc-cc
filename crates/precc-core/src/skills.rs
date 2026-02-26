@@ -175,6 +175,20 @@ pub fn load_builtin_skills(conn: &Connection, skills_dir: &Path) -> Result<usize
     Ok(loaded)
 }
 
+/// Load built-in skills from embedded TOML strings into heuristics.db.
+///
+/// Each entry is `(filename_hint, toml_content)`. Skills already present
+/// (by name) are skipped. Returns the count of newly inserted skills.
+pub fn load_builtin_skills_embedded(conn: &Connection, skills: &[(&str, &str)]) -> Result<usize> {
+    let mut loaded = 0;
+    for (_name, content) in skills {
+        if load_skill_toml(conn, content)? {
+            loaded += 1;
+        }
+    }
+    Ok(loaded)
+}
+
 /// Parse a skill TOML and update an existing skill in heuristics.db.
 ///
 /// Replaces the skill's metadata, triggers, and actions in-place.

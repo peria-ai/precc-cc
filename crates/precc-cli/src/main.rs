@@ -120,22 +120,39 @@ fn cmd_init() -> Result<()> {
         &key[..8]
     );
 
-    // Load builtin skills
+    // Load builtin skills (embedded at compile time — no external files needed)
     let heuristics_conn = db::open_heuristics(&data_dir)?;
-    let skills_dir = find_skills_dir();
-    if let Some(dir) = &skills_dir {
-        let loaded = skills::load_builtin_skills(&heuristics_conn, dir)?;
-        if loaded > 0 {
-            println!(
-                "  Loaded {} builtin skill(s) from {}",
-                loaded,
-                dir.display()
-            );
-        } else {
-            println!("  Builtin skills already loaded");
-        }
+    const BUILTIN_SKILLS: &[(&str, &str)] = &[
+        (
+            "cargo-wrong-dir",
+            include_str!("../../../skills/builtin/cargo-wrong-dir.toml"),
+        ),
+        (
+            "git-wrong-dir",
+            include_str!("../../../skills/builtin/git-wrong-dir.toml"),
+        ),
+        (
+            "go-wrong-dir",
+            include_str!("../../../skills/builtin/go-wrong-dir.toml"),
+        ),
+        (
+            "make-wrong-dir",
+            include_str!("../../../skills/builtin/make-wrong-dir.toml"),
+        ),
+        (
+            "npm-wrong-dir",
+            include_str!("../../../skills/builtin/npm-wrong-dir.toml"),
+        ),
+        (
+            "python-wrong-dir",
+            include_str!("../../../skills/builtin/python-wrong-dir.toml"),
+        ),
+    ];
+    let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;
+    if loaded > 0 {
+        println!("  Loaded {} builtin skill(s)", loaded);
     } else {
-        println!("  No builtin skills directory found (looked for skills/builtin/)");
+        println!("  Builtin skills already loaded");
     }
 
     // Print hook setup instructions
@@ -1097,32 +1114,4 @@ fn truncate_str(s: &str, max_len: usize) -> &str {
     } else {
         &s[..max_len]
     }
-}
-
-/// Find the skills/builtin/ directory (same logic as precc-hook).
-fn find_skills_dir() -> Option<std::path::PathBuf> {
-    if let Ok(exe) = std::env::current_exe() {
-        let mut dir = exe.parent()?.to_path_buf();
-        for _ in 0..5 {
-            let candidate = dir.join("skills/builtin");
-            if candidate.is_dir() {
-                return Some(candidate);
-            }
-            dir = dir.parent()?.to_path_buf();
-        }
-    }
-
-    let home = std::env::var("HOME").ok()?;
-    let candidates = [
-        format!("{home}/.local/share/precc/skills/builtin"),
-        format!("{home}/rtk/skills/builtin"),
-    ];
-    for path in &candidates {
-        let p = std::path::PathBuf::from(path);
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-
-    None
 }
