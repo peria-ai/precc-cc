@@ -33,40 +33,6 @@ claude plugin install precc
 
 Restart Claude Code to activate the plugin.
 
-### Option 3: Manual (from source)
-
-Requires Rust toolchain.
-
-```bash
-git clone https://github.com/yijunyu/precc-cc
-cd precc-cc
-cargo install --path crates/precc-hook
-cargo install --path crates/precc-cli
-```
-
-Then add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/YOU/.cargo/bin/precc-hook"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Replace `/home/YOU` with your home directory, or use `$(which precc-hook)` to find the installed path.
-
-> **Performance note:** Use the release binary (`cargo install --path crates/precc-hook`) rather than a debug build. The release binary runs in ~3ms; a debug build runs in ~480ms due to unoptimized code.
 
 ## Usage
 
@@ -115,7 +81,6 @@ leakage via `strings(1)`.
 ## Requirements
 
 - Claude Code (with hooks support)
-- Rust toolchain (for building from source only)
 - [RTK](https://github.com/rtk-ai/rtk) (optional, for output compression)
 
 ## Measured Results
@@ -182,15 +147,6 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 - `precc ingest`, `precc skills`, `precc report`, `precc savings`, `precc debug`
 - SQLite-backed failure-fix mining and pattern promotion
 - Built-in skills and mined skill promotion
-
-## Development
-
-```bash
-cargo build              # Build
-cargo test               # Test
-cargo clippy --all-targets  # Lint
-cargo fmt --all --check  # Format check
-```
 
 ## License
 
