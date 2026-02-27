@@ -97,6 +97,17 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 
 ## Changelog
 
+### v0.5.0 — Embedded Skills & Subagent Mining
+
+- **Builtin skills embedded in binary** — `precc init` loads all 6 builtin
+  skills via `include_str!` at compile time; no `skills/builtin/` directory
+  needed at runtime, protecting IP and simplifying deployment
+- **Subagent session mining fixed** — `precc ingest` now correctly mines
+  subagent JSONL files (`agent-*.jsonl`); the old positional merge missed
+  Bash events when Glob/Read/Grep results interleaved between a Bash
+  `tool_use` and its `tool_result`; replaced with `tool_use_id` lookup
+  (328 sessions / 233 pairs, up from 71 sessions / 205 pairs)
+
 ### v0.4.0 — Skills Management & GDB Pillar
 
 - **`precc skills export <name>`** — export any skill to TOML format on stdout,
