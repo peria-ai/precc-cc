@@ -155,6 +155,9 @@ fn cmd_init() -> Result<()> {
         println!("  Builtin skills already loaded");
     }
 
+    // Write prefix cache so the hook can skip heuristics.db for non-matching commands
+    skills::write_skill_prefixes(&heuristics_conn, &data_dir)?;
+
     // Print hook setup instructions
     println!();
     println!("Hook setup:");

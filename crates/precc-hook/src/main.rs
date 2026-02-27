@@ -139,6 +139,13 @@ impl Pipeline {
             Err(_) => return,
         };
 
+        // Fast pre-filter: read skill_prefixes.txt (plain text, no SQLCipher cost).
+        // If the command's first word isn't listed, skip opening heuristics.db entirely.
+        // This avoids the ~7ms SQLCipher open cost for commands that can never match.
+        if !command_matches_prefix_cache(&self.command, &data_dir) {
+            return;
+        }
+
         // Open read-only; skip if DB doesn't exist (precc init not run yet)
         let conn = match db::open_heuristics_readonly(&data_dir) {
             Ok(Some(c)) => c,
@@ -330,6 +337,30 @@ fn append_metrics_log(pipeline: &Pipeline, latency_ms: f64) {
 }
 
 /// Split a command into its `cd /path &&` prefix (if any) and the remaining command.
+/// Check whether the command's first word appears in the skill prefix cache.
+///
+/// Reads `data_dir/skill_prefixes.txt` (plain text, no SQLCipher).
+/// Returns `true` (open the DB) if:
+///   - The file doesn't exist (fall back to always opening — safe default)
+///   - The file contains `*` (wildcard: some skill has an unanalysable pattern)
+///   - The command's first word is listed in the file
+/// Returns `false` (skip DB) otherwise.
+fn command_matches_prefix_cache(command: &str, data_dir: &std::path::Path) -> bool {
+    let cache_path = data_dir.join("skill_prefixes.txt");
+    let content = match std::fs::read_to_string(&cache_path) {
+        Ok(c) => c,
+        Err(_) => return true, // No cache → always open DB (safe default)
+    };
+    let first_word = command.split_whitespace().next().unwrap_or("");
+    for line in content.lines() {
+        let line = line.trim();
+        if line == "*" || line == first_word {
+            return true;
+        }
+    }
+    false
+}
+
 fn split_cd_prefix(command: &str) -> (&str, &str) {
     if let Some(pos) = command.find(" && ") {
         if command.starts_with("cd ") {

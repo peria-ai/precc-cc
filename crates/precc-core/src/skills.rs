@@ -150,6 +150,79 @@ pub fn record_activation(conn: &Connection, skill_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Write a plain-text first-word prefix cache to `data_dir/skill_prefixes.txt`.
+///
+/// The hook reads this file (a single syscall) to decide whether to open
+/// heuristics.db at all.  If the command's first word is not listed, the
+/// 7–8ms SQLCipher open cost is skipped entirely.
+///
+/// Each line is one first-word literal extracted from enabled `command_regex`
+/// triggers (e.g. `^cargo\s+` → `cargo`).  A special sentinel line `*` means
+/// "at least one skill has a pattern that cannot be reduced to a first-word
+/// literal — always open the DB".
+pub fn write_skill_prefixes(conn: &Connection, data_dir: &Path) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT t.pattern FROM skills s
+         JOIN skill_triggers t ON t.skill_id = s.id
+         WHERE s.enabled = 1 AND t.trigger_type = 'command_regex'",
+    )?;
+    let patterns: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut prefixes: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut wildcard = false;
+
+    for pat in &patterns {
+        // Strip leading ^ and extract the first literal word.
+        // Patterns like "^cargo\s+" → "cargo"
+        // Patterns like "^(npm|npx|pnpm|yarn)\s+" → "npm", "npx", "pnpm", "yarn"
+        let stripped = pat.strip_prefix('^').unwrap_or(pat);
+        if stripped.starts_with('(') {
+            // Alternation: extract words from "(a|b|c)\s+" or "(a|b|c)..."
+            if let Some(end) = stripped.find(')') {
+                let inner = &stripped[1..end];
+                for word in inner.split('|') {
+                    let w = word.trim();
+                    if !w.is_empty()
+                        && w.chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                    {
+                        prefixes.insert(w.to_string());
+                    } else {
+                        wildcard = true;
+                    }
+                }
+            } else {
+                wildcard = true;
+            }
+        } else {
+            // Single word: take chars up to first non-alphanumeric/non-hyphen/non-underscore
+            let word: String = stripped
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if word.is_empty() {
+                wildcard = true;
+            } else {
+                prefixes.insert(word);
+            }
+        }
+    }
+
+    let mut out = prefixes.into_iter().collect::<Vec<_>>().join("\n");
+    if wildcard {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push('*');
+    }
+
+    std::fs::write(data_dir.join("skill_prefixes.txt"), out)?;
+    Ok(())
+}
+
 /// Load built-in skills from TOML files into heuristics.db (if not already present).
 pub fn load_builtin_skills(conn: &Connection, skills_dir: &Path) -> Result<usize> {
     let mut loaded = 0;

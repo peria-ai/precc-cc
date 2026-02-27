@@ -11,7 +11,7 @@
 //! - `precc-miner --foreground` — don't write PID file, log to stderr
 
 use anyhow::{Context, Result};
-use precc_core::{db, mining, promote};
+use precc_core::{db, mining, promote, skills};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -154,6 +154,11 @@ fn run_once() -> Result<()> {
             "lifecycle: {} → active, {} → trusted, {} disabled",
             lifecycle.promoted_to_active, lifecycle.promoted_to_trusted, lifecycle.auto_disabled,
         ));
+    }
+
+    // Refresh prefix cache so the hook skips DB open for non-matching commands
+    if let Err(e) = skills::write_skill_prefixes(&heuristics_conn, &data_dir) {
+        log(&format!("prefixes: failed to write cache: {e}"));
     }
 
     log("precc-miner: single pass complete");
@@ -304,6 +309,11 @@ fn tick(data_dir: &std::path::Path) -> Result<()> {
         mine_summary.pairs_found as f64,
         None,
     );
+
+    // Refresh prefix cache so the hook skips DB open for non-matching commands
+    if let Err(e) = skills::write_skill_prefixes(&heuristics_conn, data_dir) {
+        log(&format!("prefixes: failed to write cache: {e}"));
+    }
 
     Ok(())
 }
