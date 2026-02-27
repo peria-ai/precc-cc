@@ -97,6 +97,18 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 
 ## Changelog
 
+### v0.6.0 — Hook Latency Optimization
+
+- **Prefix cache pre-filter** — `precc init` and `precc-miner` write
+  `skill_prefixes.txt` (plain text, one first-word per line) to the data
+  directory; the hook reads this with a single `read()` syscall and skips
+  opening `heuristics.db` entirely when the command's first word is not
+  listed, saving ~3ms per invocation for non-matching commands (`echo`,
+  `curl`, `ls`, etc.)
+- Investigated hook latency: identified `heuristics.db` SQLCipher open
+  (~7–8ms per process) as the dominant cost; binary startup is 1.5ms,
+  context resolution and RTK are <1ms each
+
 ### v0.5.0 — Embedded Skills & Subagent Mining
 
 - **Builtin skills embedded in binary** — `precc init` loads all 6 builtin
