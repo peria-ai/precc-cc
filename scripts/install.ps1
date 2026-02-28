@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "your-org/precc"   # ← update to the actual GitHub repo
+$Repo = "yijunyu/precc-cc.priv"
 $Target = "x86_64-pc-windows-msvc"
 $InstallDir = Join-Path $env:LOCALAPPDATA "precc\bin"
 

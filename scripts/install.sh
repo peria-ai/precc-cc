@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO="your-org/precc"   # ← update to the actual GitHub repo
+REPO="yijunyu/precc-cc.priv"
 DEFAULT_PREFIX="${HOME}/.local"
 
 # ---------------------------------------------------------------------------
