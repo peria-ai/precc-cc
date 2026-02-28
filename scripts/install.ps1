@@ -1,7 +1,7 @@
 # install.ps1 — PRECC installer for Windows
 #
 # Usage (PowerShell one-liner):
-#   iwr -useb https://raw.githubusercontent.com/your-org/precc/main/scripts/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.ps1 | iex
 #
 # Or download and run:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 [-Version v0.1.0]
@@ -18,9 +18,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "yijunyu/precc"
+$Repo = "yijunyu/precc-cc"
 $Target = "x86_64-pc-windows-msvc"
-$InstallDir = Join-Path $env:LOCALAPPDATA "precc\bin"
+$InstallDir = Join-Path $env:LOCALAPPDATA "precc-cc\bin"
 
 # ---------------------------------------------------------------------------
 # Resolve version
@@ -47,7 +47,7 @@ Write-Host "Installing PRECC $Version..."
 # ---------------------------------------------------------------------------
 # Download and extract
 # ---------------------------------------------------------------------------
-$Archive = "precc-$Version-$Target.zip"
+$Archive = "precc-cc-$Version-$Target.zip"
 $Url = "https://github.com/$Repo/releases/download/$Version/$Archive"
 $TmpDir = Join-Path $env:TEMP "precc-install-$(New-Guid)"
 $ArchivePath = Join-Path $TmpDir $Archive
@@ -68,7 +68,7 @@ try {
     Write-Host "Extracting..."
     Expand-Archive -Path $ArchivePath -DestinationPath $TmpDir -Force
 
-    $Extracted = Join-Path $TmpDir "precc-$Version-$Target"
+    $Extracted = Join-Path $TmpDir "precc-cc-$Version-$Target"
 
     # -----------------------------------------------------------------------
     # Install binaries

@@ -2,7 +2,7 @@
 # install.sh — PRECC installer for Linux and macOS
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/your-org/precc/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
 #   or: bash install.sh [--version v0.1.0] [--prefix ~/.local]
 #
 # After installation:
@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO="yijunyu/precc"
+REPO="yijunyu/precc-cc"
 DEFAULT_PREFIX="${HOME}/.local"
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ echo "Installing PRECC ${VERSION}..."
 # ---------------------------------------------------------------------------
 # Download and extract
 # ---------------------------------------------------------------------------
-ARCHIVE="precc-${VERSION}-${TARGET}.tar.gz"
+ARCHIVE="precc-cc-${VERSION}-${TARGET}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
@@ -102,7 +102,7 @@ curl -fsSL --progress-bar -o "${TMP}/${ARCHIVE}" "${URL}"
 
 echo "Extracting..."
 tar -xzf "${TMP}/${ARCHIVE}" -C "${TMP}"
-EXTRACTED="${TMP}/precc-${VERSION}-${TARGET}"
+EXTRACTED="${TMP}/precc-cc-${VERSION}-${TARGET}"
 
 # ---------------------------------------------------------------------------
 # Install binaries
