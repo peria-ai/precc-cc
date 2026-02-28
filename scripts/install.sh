@@ -92,7 +92,7 @@ echo "Installing PRECC ${VERSION}..."
 # ---------------------------------------------------------------------------
 # Download and extract
 # ---------------------------------------------------------------------------
-ARCHIVE="precc-cc-${VERSION}-${TARGET}.tar.gz"
+ARCHIVE="precc-${VERSION}-${TARGET}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
@@ -102,7 +102,7 @@ curl -fsSL --progress-bar -o "${TMP}/${ARCHIVE}" "${URL}"
 
 echo "Extracting..."
 tar -xzf "${TMP}/${ARCHIVE}" -C "${TMP}"
-EXTRACTED="${TMP}/precc-cc-${VERSION}-${TARGET}"
+EXTRACTED="${TMP}/precc-${VERSION}-${TARGET}"
 
 # ---------------------------------------------------------------------------
 # Install binaries
