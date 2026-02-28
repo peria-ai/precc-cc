@@ -1,14 +1,14 @@
 source_dir = "."
 demo_dir = "../precc-cc"
 demo_repo = "git@github.com:yijunyu/precc-cc.git"
-demo_branch = "main"
+demo_branch = "demo"
 remote_branch = "main"
 project_name = "precc-cc"
 commit_message = "Update demo"
 push = true
 squash = true
 [mappings]
-"README.md" = "README.md"
+"README.demo.md" = "README.md"
 "LICENSE-MIT" = "LICENSE-MIT"
 ".gitattributes" = ".gitattributes"
 ".gitignore" = ".gitignore"
