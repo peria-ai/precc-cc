@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "yijunyu/precc-cc.priv"
+$Repo = "yijunyu/precc"
 $Target = "x86_64-pc-windows-msvc"
 $InstallDir = Join-Path $env:LOCALAPPDATA "precc\bin"
 

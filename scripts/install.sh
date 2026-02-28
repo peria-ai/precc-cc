@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO="yijunyu/precc-cc.priv"
+REPO="yijunyu/precc"
 DEFAULT_PREFIX="${HOME}/.local"
 
 # ---------------------------------------------------------------------------
