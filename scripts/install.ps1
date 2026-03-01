@@ -47,7 +47,7 @@ Write-Host "Installing PRECC $Version..."
 # ---------------------------------------------------------------------------
 # Download and extract
 # ---------------------------------------------------------------------------
-$Archive = "precc-cc-$Version-$Target.zip"
+$Archive = "precc-$Version-$Target.zip"
 $Url = "https://github.com/$Repo/releases/download/$Version/$Archive"
 $TmpDir = Join-Path $env:TEMP "precc-install-$(New-Guid)"
 $ArchivePath = Join-Path $TmpDir $Archive
@@ -68,7 +68,7 @@ try {
     Write-Host "Extracting..."
     Expand-Archive -Path $ArchivePath -DestinationPath $TmpDir -Force
 
-    $Extracted = Join-Path $TmpDir "precc-cc-$Version-$Target"
+    $Extracted = Join-Path $TmpDir "precc-$Version-$Target"
 
     # -----------------------------------------------------------------------
     # Install binaries
