@@ -15,27 +15,27 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
-            use_cross: true
+            use_zigbuild: true
             archive: tar.gz
 
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
-            use_cross: true
+            use_zigbuild: true
             archive: tar.gz
 
           - target: x86_64-apple-darwin
             runner: macos-13
-            use_cross: false
+            use_zigbuild: false
             archive: tar.gz
 
           - target: aarch64-apple-darwin
             runner: macos-14
-            use_cross: false
+            use_zigbuild: false
             archive: tar.gz
 
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
-            use_cross: false
+            use_zigbuild: false
             archive: zip
 
     steps:
@@ -45,6 +45,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # ---- Linux: zigbuild for glibc 2.17 compatibility ----
+      - name: Install cargo-zigbuild (Linux)
+        if: matrix.use_zigbuild
+        run: |
+          pip3 install ziglang
+          cargo install cargo-zigbuild
 
       # ---- macOS: OpenSSL (required by SQLCipher amalgamation) ----
       - name: Install OpenSSL (macOS)
@@ -63,23 +70,19 @@ jobs:
           echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static" >> $env:GITHUB_ENV
           echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
 
-      # ---- Linux cross: install cross ----
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      # ---- Build ----
-      - name: Build (cross)
-        if: matrix.use_cross
+      # ---- Build (Linux via zigbuild — targets glibc 2.17+) ----
+      - name: Build (zigbuild)
+        if: matrix.use_zigbuild
         run: |
-          cross build --release \
+          cargo zigbuild --release \
             -p precc-hook \
             -p precc-cli \
             -p precc-miner \
-            --target ${{ matrix.target }}
+            --target ${{ matrix.target }}.2.17
 
+      # ---- Build (cargo — macOS / Windows) ----
       - name: Build (cargo)
-        if: '!matrix.use_cross'
+        if: '!matrix.use_zigbuild'
         run: |
           cargo build --release \
             -p precc-hook \
@@ -99,8 +102,6 @@ jobs:
           cp "target/${{ matrix.target }}/release/precc" "$STAGING/"
           cp "target/${{ matrix.target }}/release/precc-hook" "$STAGING/"
           cp "target/${{ matrix.target }}/release/precc-miner" "$STAGING/"
-          cp scripts/install.sh "$STAGING/" 2>/dev/null || true
-          cp README.md "$STAGING/" 2>/dev/null || true
           tar -czf "$ARCHIVE" "$STAGING"
           echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
 
@@ -116,12 +117,6 @@ jobs:
           Copy-Item "target\${{ matrix.target }}\release\precc.exe" "$staging\"
           Copy-Item "target\${{ matrix.target }}\release\precc-hook.exe" "$staging\"
           Copy-Item "target\${{ matrix.target }}\release\precc-miner.exe" "$staging\"
-          if (Test-Path "scripts\install.ps1") {
-            Copy-Item "scripts\install.ps1" "$staging\"
-          }
-          if (Test-Path "README.md") {
-            Copy-Item "README.md" "$staging\"
-          }
           Compress-Archive -Path "$staging\*" -DestinationPath $archive
           echo "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -130,5 +125,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ASSET }}
+          repository: yijunyu/precc-cc
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PRECC_CC_TOKEN }}

@@ -50,11 +50,12 @@ cd "$REPO_DIR"
 # ---------------------------------------------------------------------------
 # Step 2: Build release binaries
 # ---------------------------------------------------------------------------
-echo "==> Step 2: Building release binaries..."
-cargo build --release \
+echo "==> Step 2: Building release binaries (glibc 2.17 compatible)..."
+cargo zigbuild --release \
     -p precc-hook \
     -p precc-cli \
-    -p precc-miner
+    -p precc-miner \
+    --target x86_64-unknown-linux-gnu.2.17
 
 # ---------------------------------------------------------------------------
 # Step 3: Package archive
@@ -67,9 +68,9 @@ trap 'rm -rf "$TMP"' EXIT
 
 echo "==> Step 3: Packaging ${ARCHIVE}..."
 mkdir -p "${TMP}/${STAGING}"
-cp target/release/precc       "${TMP}/${STAGING}/"
-cp target/release/precc-hook  "${TMP}/${STAGING}/"
-cp target/release/precc-miner "${TMP}/${STAGING}/"
+cp "target/${TARGET}/release/precc"       "${TMP}/${STAGING}/"
+cp "target/${TARGET}/release/precc-hook"  "${TMP}/${STAGING}/"
+cp "target/${TARGET}/release/precc-miner" "${TMP}/${STAGING}/"
 tar -czf "${TMP}/${ARCHIVE}" -C "$TMP" "$STAGING"
 
 # ---------------------------------------------------------------------------
