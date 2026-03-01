@@ -48,9 +48,9 @@ cd "$REPO_DIR"
 ../precc/target/release/deploy-demo --config deploy.toml
 
 # ---------------------------------------------------------------------------
-# Step 2: Build release binaries
+# Step 2: Build Linux binaries (zigbuild, glibc 2.17 compatible)
 # ---------------------------------------------------------------------------
-echo "==> Step 2: Building release binaries (glibc 2.17 compatible)..."
+echo "==> Step 2a: Building Linux binaries..."
 cargo zigbuild --release \
     -p precc-hook \
     -p precc-cli \
@@ -59,13 +59,47 @@ cargo zigbuild --release \
     --target aarch64-unknown-linux-gnu.2.17
 
 # ---------------------------------------------------------------------------
+# Step 2b: Build macOS binaries (osxcross via Docker)
+# ---------------------------------------------------------------------------
+DOCKER_IMAGE="joseluisq/rust-linux-darwin-builder:latest"
+OSXCROSS_BIN="/usr/local/osxcross/target/bin"
+CARGO_BIN="/root/.cargo/bin"
+
+build_macos() {
+    local TARGET="$1"
+    local TRIPLE="${TARGET//-/_}"           # e.g. x86_64_apple_darwin
+    local DARWIN_TRIPLE="${TARGET/x86_64/x86_64}-apple-darwin22.4"
+    if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
+        DARWIN_TRIPLE="aarch64-apple-darwin22.4"
+    else
+        DARWIN_TRIPLE="x86_64-apple-darwin22.4"
+    fi
+    echo "==> Step 2b: Building ${TARGET} via Docker (osxcross)..."
+    sg docker -c "docker run --rm \
+        -v '$(pwd):/workspace' \
+        -w /workspace \
+        -e PATH=${CARGO_BIN}:${OSXCROSS_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        -e CC_${TRIPLE//-/_}=${DARWIN_TRIPLE}-clang \
+        -e CXX_${TRIPLE//-/_}=${DARWIN_TRIPLE}-clang++ \
+        -e AR_${TRIPLE//-/_}=${DARWIN_TRIPLE}-ar \
+        -e RANLIB_${TRIPLE//-/_}=${DARWIN_TRIPLE}-ranlib \
+        -e CARGO_TARGET_$(echo "${TRIPLE}" | tr '[:lower:]' '[:upper:]')_LINKER=${DARWIN_TRIPLE}-clang \
+        -e OPENSSL_BUILD_RANLIB=${DARWIN_TRIPLE}-ranlib \
+        ${DOCKER_IMAGE} \
+        sh -c 'cargo build --release -p precc-hook -p precc-cli -p precc-miner --target ${TARGET} 2>&1 | tail -5'"
+}
+
+build_macos "x86_64-apple-darwin"
+build_macos "aarch64-apple-darwin"
+
+# ---------------------------------------------------------------------------
 # Step 3: Package archives
 # ---------------------------------------------------------------------------
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 ASSETS=()
 
-for TARGET in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+for TARGET in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
     STAGING="precc-${VERSION}-${TARGET}"
     ARCHIVE="${STAGING}.tar.gz"
     echo "==> Step 3: Packaging ${ARCHIVE}..."
