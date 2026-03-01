@@ -41,7 +41,7 @@ enum Commands {
     /// GDB-based debugging helper
     Debug {
         /// Binary to debug
-        binary: String,
+        binary: Option<String>,
         /// Arguments to pass to the binary
         args: Vec<String>,
     },
@@ -72,7 +72,17 @@ fn main() -> Result<()> {
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Ingest { file, all, force }) => cmd_ingest(file, all, force),
         Some(Commands::Skills { action }) => cmd_skills(action),
-        Some(Commands::Debug { binary, args }) => cmd_debug(binary, args),
+        Some(Commands::Debug { binary: Some(binary), args }) => cmd_debug(binary, args),
+        Some(Commands::Debug { binary: None, .. }) => {
+            println!("Usage: precc debug <binary> [args...]");
+            println!();
+            println!("Generates a .gdbinit-precc script and launches GDB on the given binary.");
+            println!();
+            println!("Examples:");
+            println!("  precc debug target/debug/myapp");
+            println!("  precc debug target/debug/myapp --arg1 value");
+            Ok(())
+        }
         Some(Commands::Report) => cmd_report(),
         Some(Commands::Savings) => cmd_savings(),
         None => {
