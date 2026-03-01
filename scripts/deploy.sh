@@ -55,23 +55,27 @@ cargo zigbuild --release \
     -p precc-hook \
     -p precc-cli \
     -p precc-miner \
-    --target x86_64-unknown-linux-gnu.2.17
+    --target x86_64-unknown-linux-gnu.2.17 \
+    --target aarch64-unknown-linux-gnu.2.17
 
 # ---------------------------------------------------------------------------
-# Step 3: Package archive
+# Step 3: Package archives
 # ---------------------------------------------------------------------------
-TARGET="x86_64-unknown-linux-gnu"
-STAGING="precc-${VERSION}-${TARGET}"
-ARCHIVE="${STAGING}.tar.gz"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+ASSETS=()
 
-echo "==> Step 3: Packaging ${ARCHIVE}..."
-mkdir -p "${TMP}/${STAGING}"
-cp "target/${TARGET}/release/precc"       "${TMP}/${STAGING}/"
-cp "target/${TARGET}/release/precc-hook"  "${TMP}/${STAGING}/"
-cp "target/${TARGET}/release/precc-miner" "${TMP}/${STAGING}/"
-tar -czf "${TMP}/${ARCHIVE}" -C "$TMP" "$STAGING"
+for TARGET in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+    STAGING="precc-${VERSION}-${TARGET}"
+    ARCHIVE="${STAGING}.tar.gz"
+    echo "==> Step 3: Packaging ${ARCHIVE}..."
+    mkdir -p "${TMP}/${STAGING}"
+    cp "target/${TARGET}/release/precc"       "${TMP}/${STAGING}/"
+    cp "target/${TARGET}/release/precc-hook"  "${TMP}/${STAGING}/"
+    cp "target/${TARGET}/release/precc-miner" "${TMP}/${STAGING}/"
+    tar -czf "${TMP}/${ARCHIVE}" -C "$TMP" "$STAGING"
+    ASSETS+=("${TMP}/${ARCHIVE}")
+done
 
 # ---------------------------------------------------------------------------
 # Step 4: Push main to public repo and tag
@@ -100,7 +104,7 @@ gh release create "${VERSION}" \
     --title "${RELEASE_TITLE}" \
     --notes "${RELEASE_NOTES}" \
     --latest \
-    "${TMP}/${ARCHIVE}"
+    "${ASSETS[@]}"
 
 echo "==> Step 6: Committing and pushing private repo..."
 git commit -am "deployed ${VERSION}" || echo "(nothing to commit)"
