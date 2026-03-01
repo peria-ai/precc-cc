@@ -73,15 +73,14 @@ cp target/release/precc-miner "${TMP}/${STAGING}/"
 tar -czf "${TMP}/${ARCHIVE}" -C "$TMP" "$STAGING"
 
 # ---------------------------------------------------------------------------
-# Step 4: Tag and push to public remote
+# Step 4: Push main to public repo and tag
 # ---------------------------------------------------------------------------
-echo "==> Step 4: Tagging ${VERSION}..."
+echo "==> Step 4: Tagging ${VERSION} and pushing tag to public repo..."
 git tag "${VERSION}" 2>/dev/null || { echo "Tag ${VERSION} already exists locally — delete it first."; exit 1; }
-git push --force "${PUBLIC_REMOTE}" HEAD:main
 git push "${PUBLIC_REMOTE}" "${VERSION}"
 
 # ---------------------------------------------------------------------------
-# Step 5: Create GitHub release and upload asset
+# Step 5: Create GitHub release and upload binary asset only
 # ---------------------------------------------------------------------------
 echo "==> Step 5: Creating GitHub release..."
 RELEASE_TITLE="${TITLE:-PRECC ${VERSION}}"

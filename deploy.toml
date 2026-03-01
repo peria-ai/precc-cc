@@ -10,7 +10,5 @@ squash = true
 [mappings]
 "README.demo.md" = "README.md"
 "LICENSE-MIT" = "LICENSE-MIT"
-".gitattributes" = ".gitattributes"
-".gitignore" = ".gitignore"
 "scripts/install.ps1" = "scripts/install.ps1"
 "scripts/install.sh" = "scripts/install.sh"
