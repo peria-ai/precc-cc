@@ -13,6 +13,8 @@ use precc_core::{db, gdb, metrics, mining, rtk, skills};
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
 
+mod gif;
+
 #[derive(Parser)]
 #[command(name = "precc", about = "Predictive Error Correction for Claude Code")]
 struct Cli {
@@ -51,6 +53,15 @@ enum Commands {
     Savings,
     /// Setup hook and databases
     Init,
+    /// Convert a bash script to an animated GIF at a target duration
+    Gif {
+        /// Bash script to animate
+        script: String,
+        /// Target GIF length, e.g. "30s" or "2m"
+        length: String,
+        /// Expected user inputs (quoted strings, piped to script stdin)
+        inputs: Vec<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -72,7 +83,10 @@ fn main() -> Result<()> {
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Ingest { file, all, force }) => cmd_ingest(file, all, force),
         Some(Commands::Skills { action }) => cmd_skills(action),
-        Some(Commands::Debug { binary: Some(binary), args }) => cmd_debug(binary, args),
+        Some(Commands::Debug {
+            binary: Some(binary),
+            args,
+        }) => cmd_debug(binary, args),
         Some(Commands::Debug { binary: None, .. }) => {
             println!("Usage: precc debug <binary> [args...]");
             println!();
@@ -85,6 +99,11 @@ fn main() -> Result<()> {
         }
         Some(Commands::Report) => cmd_report(),
         Some(Commands::Savings) => cmd_savings(),
+        Some(Commands::Gif {
+            script,
+            length,
+            inputs,
+        }) => gif::cmd_gif(script, length, inputs),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -156,6 +175,10 @@ fn cmd_init() -> Result<()> {
         (
             "python-wrong-dir",
             include_str!("../../../skills/builtin/python-wrong-dir.toml"),
+        ),
+        (
+            "asciinema-gif",
+            include_str!("../../../skills/builtin/asciinema-gif.toml"),
         ),
     ];
     let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;

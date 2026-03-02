@@ -1,0 +1,15 @@
+[skill]
+name = "asciinema-gif"
+description = "Convert a bash demo script to an animated GIF at a target duration"
+source = "builtin"
+priority = 40
+
+[[triggers]]
+type = "command_regex"
+pattern = '^asciinema\s+rec'
+weight = 1.0
+
+[[actions]]
+type = "rewrite_command"
+template = "precc gif {{original_command}}"
+confidence = 0.75
