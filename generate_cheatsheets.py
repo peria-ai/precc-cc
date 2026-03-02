@@ -7,6 +7,8 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 import copy
+import glob
+import os
 
 # ---------------------------------------------------------------------------
 # Persona definitions
@@ -521,7 +523,7 @@ def add_section_with_bullets(slide, x, y, w, section_title, bullets, accent_colo
 # Main slide builder
 # ---------------------------------------------------------------------------
 
-def build_slide(prs, persona, slide_data, lang="en"):
+def build_slide(prs, persona, slide_data, lang="en", gif_path=None):
     """Build one slide and add it to prs."""
     blank_layout = prs.slide_layouts[6]
     slide = prs.slides.add_slide(blank_layout)
@@ -658,6 +660,19 @@ def build_slide(prs, persona, slide_data, lang="en"):
     run.font.size = Pt(10)
     run.font.color.rgb = WHITE
 
+    # ---- ANIMATED GIF (lower-right area) ----
+    # Embedded as a video/GIF movie in the right column below content.
+    if gif_path and os.path.exists(gif_path):
+        GIF_W = Inches(4.5)
+        GIF_H = Inches(2.8)
+        GIF_X = RIGHT_X + Inches(1.4)
+        GIF_Y = BOTTOM_STRIP_Y - GIF_H - Inches(0.1)
+        slide.shapes.add_movie(
+            gif_path,
+            GIF_X, GIF_Y, GIF_W, GIF_H,
+            mime_type="image/gif",
+        )
+
     return slide
 
 
@@ -672,28 +687,43 @@ def make_prs():
     return prs
 
 
-def generate(output_path, slides_data, lang="en"):
+def find_gif(persona_id: str, repo_root: str) -> str | None:
+    """Return the most recent GIF for a given persona, or None."""
+    pattern = os.path.join(repo_root, f"{persona_id}-*.gif")
+    matches = sorted(glob.glob(pattern))
+    return matches[-1] if matches else None
+
+
+def generate(output_path, slides_data, lang="en", repo_root="."):
     prs = make_prs()
     for i, (persona, slide_data) in enumerate(zip(PERSONAS, slides_data)):
-        print(f"  Building slide {i+1}: {slide_data['persona_tag']}")
-        build_slide(prs, persona, slide_data, lang=lang)
+        gif_path = find_gif(persona["id"], repo_root)
+        if gif_path:
+            print(f"  Building slide {i+1}: {slide_data['persona_tag']} + GIF: {os.path.basename(gif_path)}")
+        else:
+            print(f"  Building slide {i+1}: {slide_data['persona_tag']} (no GIF found)")
+        build_slide(prs, persona, slide_data, lang=lang, gif_path=gif_path)
     prs.save(output_path)
     print(f"Saved: {output_path}")
 
 
 if __name__ == "__main__":
+    REPO = "/home/y00577373/precc_cc_priv"
+
     print("Generating English cheatsheet...")
     generate(
-        "/home/y00577373/precc_cc_priv/precc-cheatsheet-en.pptx",
+        os.path.join(REPO, "precc-cheatsheet-en.pptx"),
         SLIDES_EN,
-        lang="en"
+        lang="en",
+        repo_root=REPO,
     )
 
     print("Generating Chinese cheatsheet...")
     generate(
-        "/home/y00577373/precc_cc_priv/precc-cheatsheet-zh.pptx",
+        os.path.join(REPO, "precc-cheatsheet-zh.pptx"),
         SLIDES_ZH,
-        lang="zh"
+        lang="zh",
+        repo_root=REPO,
     )
 
     print("Done.")
