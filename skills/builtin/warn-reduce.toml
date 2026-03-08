@@ -1,0 +1,30 @@
+[skill]
+name = "warn-reduce"
+description = "Iteratively eliminate Clippy warnings using the Li et al. (arXiv:2310.11738) Pareto strategy: auto-fix machine-fixable warnings first, then semantic rewrite the rest. Target: zero warnings (project enforces all-warnings-as-errors)."
+source = "builtin"
+priority = 43
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+clippy\b'
+weight = 0.8
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+clippy\s+.*--fix\b'
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "Cargo.toml"
+weight = 0.5
+
+[[actions]]
+type = "rewrite_command"
+template = "cargo clippy --all-targets --fix --allow-dirty --allow-staged 2>&1 | tail -5 && cargo clippy --all-targets 2>&1 | grep -c '^warning' || echo '0 warnings remaining'"
+confidence = 0.8
+
+[[actions]]
+type = "suggest_fix"
+template = "After auto-fix: manually rewrite remaining arithmetic_side_effects (use checked_add/saturating_add), as_conversions (use From/TryFrom), and doc_lazy_continuation (add blank line before continuation paragraph)"
+confidence = 0.9

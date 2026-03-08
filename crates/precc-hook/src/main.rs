@@ -344,6 +344,7 @@ fn append_metrics_log(pipeline: &Pipeline, latency_ms: f64) {
 ///   - The file doesn't exist (fall back to always opening — safe default)
 ///   - The file contains `*` (wildcard: some skill has an unanalysable pattern)
 ///   - The command's first word is listed in the file
+///
 /// Returns `false` (skip DB) otherwise.
 fn command_matches_prefix_cache(command: &str, data_dir: &std::path::Path) -> bool {
     let cache_path = data_dir.join("skill_prefixes.txt");

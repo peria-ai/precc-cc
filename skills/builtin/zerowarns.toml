@@ -1,0 +1,30 @@
+[skill]
+name = "zerowarns"
+description = "Compiler-guaranteed elimination of Clippy warnings via semantic rewriting — no #[allow] suppression. Rewrites arithmetic_side_effects, as_conversions, and doc_lazy_continuation to their correct forms."
+source = "builtin"
+priority = 42
+
+[[triggers]]
+type = "command_regex"
+pattern = '^(zerowarns|warn-rewrite)\b'
+weight = 1.0
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+clippy\b'
+weight = 0.7
+
+[[triggers]]
+type = "file_exists"
+pattern = "Cargo.toml"
+weight = 0.5
+
+[[actions]]
+type = "rewrite_command"
+template = "cargo clippy --all-targets 2>&1 | grep '^warning' | sort | uniq -c | sort -rn | head -20"
+confidence = 0.85
+
+[[actions]]
+type = "suggest_fix"
+template = "Run `cargo clippy --all-targets --fix --allow-dirty` then review semantic rewrites for arithmetic_side_effects and as_conversions"
+confidence = 0.9

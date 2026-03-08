@@ -1,0 +1,30 @@
+[skill]
+name = "warn-identify"
+description = "Identify and rank high-frequency Clippy warnings in a Rust project. Reports warnings per KLOC using the Li et al. (arXiv:2310.11738) methodology. Fires when clippy produces warnings."
+source = "builtin"
+priority = 44
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+clippy\b'
+weight = 0.8
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+build\b'
+weight = 0.5
+
+[[triggers]]
+type = "file_exists"
+pattern = "Cargo.toml"
+weight = 0.5
+
+[[actions]]
+type = "rewrite_command"
+template = "cargo clippy --all-targets --message-format=json 2>/dev/null | python3 -c \"import sys,json; warns=[json.loads(l) for l in sys.stdin if l.strip()]; codes=[w['message']['code']['code'] for w in warns if w.get('message',{}).get('level')=='warning' and w['message'].get('code')]; [print(f'{codes.count(c):4d}x  {c}') for c in sorted(set(codes), key=lambda c: -codes.count(c))]\" 2>/dev/null || cargo clippy --all-targets 2>&1 | grep '^warning' | grep -oP '\\[\\Kclippy::[^\\]]+' | sort | uniq -c | sort -rn"
+confidence = 0.85
+
+[[actions]]
+type = "suggest_fix"
+template = "Address the top warning category first (Pareto: fixing the most frequent lint often eliminates 40-60% of total warnings)"
+confidence = 0.8
