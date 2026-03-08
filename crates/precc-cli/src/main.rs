@@ -180,6 +180,18 @@ fn cmd_init() -> Result<()> {
             "asciinema-gif",
             include_str!("../../../skills/builtin/asciinema-gif.toml"),
         ),
+        (
+            "warn-identify",
+            include_str!("../../../skills/builtin/warn-identify.toml"),
+        ),
+        (
+            "warn-reduce",
+            include_str!("../../../skills/builtin/warn-reduce.toml"),
+        ),
+        (
+            "zerowarns",
+            include_str!("../../../skills/builtin/zerowarns.toml"),
+        ),
     ];
     let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;
     if loaded > 0 {
