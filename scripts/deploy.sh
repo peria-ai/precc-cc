@@ -12,8 +12,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PUBLIC_REMOTE="public"
 PUBLIC_REPO="yijunyu/precc-cc"
-RELEASE_VERSION="v0.1.0"   # Public release version — update when ready to bump
-
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
@@ -120,15 +118,15 @@ echo "==> Step 4: Pushing main to public repo..."
 PUBLIC_SHA=$(git ls-remote "${PUBLIC_REMOTE}" refs/heads/main | cut -f1)
 
 # Delete existing release and tag on public repo if present (idempotent redeploy)
-gh release delete "${RELEASE_VERSION}" --repo "${PUBLIC_REPO}" --yes 2>/dev/null || true
-git push "${PUBLIC_REMOTE}" ":refs/tags/${RELEASE_VERSION}" 2>/dev/null || true
+gh release delete "${VERSION}" --repo "${PUBLIC_REPO}" --yes 2>/dev/null || true
+git push "${PUBLIC_REMOTE}" ":refs/tags/${VERSION}" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Step 5: Create GitHub release pinned to public SHA (no tag pushed = no auto source archives)
 # ---------------------------------------------------------------------------
-echo "==> Step 5: Creating GitHub release ${RELEASE_VERSION} at ${PUBLIC_SHA}..."
-RELEASE_TITLE="${TITLE:-PRECC ${RELEASE_VERSION}}"
-RELEASE_NOTES="${NOTES:-## ${RELEASE_VERSION}
+echo "==> Step 5: Creating GitHub release ${VERSION} at ${PUBLIC_SHA}..."
+RELEASE_TITLE="${TITLE:-PRECC ${VERSION}}"
+RELEASE_NOTES="${NOTES:-## ${VERSION}
 
 - See commit history for changes.
 
@@ -138,7 +136,7 @@ curl -fsSL https://raw.githubusercontent.com/${PUBLIC_REPO}/main/scripts/install
 precc init
 \`\`\`}"
 
-gh release create "${RELEASE_VERSION}" \
+gh release create "${VERSION}" \
     --repo "${PUBLIC_REPO}" \
     --title "${RELEASE_TITLE}" \
     --notes "${RELEASE_NOTES}" \
@@ -152,4 +150,4 @@ git push origin master
 git push origin demo
 
 echo ""
-echo "Done. PRECC ${RELEASE_VERSION} is live at https://github.com/${PUBLIC_REPO}/releases/tag/${RELEASE_VERSION}"
+echo "Done. PRECC ${VERSION} is live at https://github.com/${PUBLIC_REPO}/releases/tag/${VERSION}"
