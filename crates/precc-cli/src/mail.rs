@@ -200,9 +200,12 @@ fn send_via_ssh_relay(
     };
 
     let from = smtp.from.as_deref().unwrap_or(&smtp.username);
-    // Escape single quotes in user-controlled strings
-    let body_escaped = body.replace('\\', "\\\\").replace('\'', "\\'");
-    let subject_escaped = subject.replace('\\', "\\\\").replace('\'', "\\'");
+    // Escape triple-quote sequences in user-controlled strings (used in Python heredoc)
+    let body_escaped = body.replace('\\', "\\\\").replace("\"\"\"", "\\\"\\\"\\\"");
+    let subject_escaped = subject
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n");
 
     let python = format!(
         r#"import smtplib, ssl, os, mimetypes
@@ -223,7 +226,7 @@ msg = EmailMessage()
 msg['Subject'] = '{subj}'
 msg['From']    = FROM
 msg['To']      = TO
-msg.set_content('{body}')
+msg.set_content("""{body}""")
 
 for path in ATTACHMENTS:
     if not os.path.exists(path):
