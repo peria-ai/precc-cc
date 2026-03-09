@@ -17,7 +17,11 @@ mod gif;
 mod mail;
 
 #[derive(Parser)]
-#[command(name = "precc", about = "Predictive Error Correction for Claude Code")]
+#[command(
+    name = "precc",
+    about = "Predictive Error Correction for Claude Code",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -1326,93 +1330,101 @@ fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
     const REPO: &str = "yijunyu/precc-cc";
     const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
-    // ── 1. Resolve target version ────────────────────────────────────────────
-    let target_version = if let Some(v) = requested_version {
-        if v.starts_with('v') {
-            v
-        } else {
-            format!("v{v}")
+    // ── 1. Detect platform triple ────────────────────────────────────────────
+    let target_triple = update_target_triple().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unsupported platform {}/{}. \
+             Download manually from https://github.com/{REPO}/releases",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    })?;
+
+    // ── 2. Fetch release metadata from GitHub API ────────────────────────────
+    let api_url = match &requested_version {
+        Some(v) => {
+            let tag = update_normalise_version(v);
+            format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}")
         }
-    } else {
-        println!("Checking latest release...");
-        let output = Command::new("curl")
-            .args([
-                "-fsSL",
-                &format!("https://api.github.com/repos/{REPO}/releases/latest"),
-            ])
-            .output()
-            .context("curl not found — install curl to use `precc update`")?;
-        if !output.status.success() {
-            bail!("Failed to reach GitHub API");
+        None => {
+            println!("Checking latest release...");
+            format!("https://api.github.com/repos/{REPO}/releases/latest")
         }
-        let body = String::from_utf8_lossy(&output.stdout);
-        // parse "tag_name": "v0.x.y"
-        body.lines()
-            .find(|l| l.contains("\"tag_name\""))
-            .and_then(|l| {
-                let s = l.find('"')?;
-                let rest = &l[s + 1..];
-                let s2 = rest.find('"')?;
-                let rest2 = &rest[s2 + 1..];
-                let s3 = rest2.find('"')?;
-                let e = rest2[s3 + 1..].find('"')?;
-                Some(rest2[s3 + 1..s3 + 1 + e].to_string())
-            })
-            .context("Could not parse latest release tag from GitHub API")?
     };
 
-    // ── 2. Compare with running version ─────────────────────────────────────
-    let target_bare = target_version.trim_start_matches('v');
-    if !force && target_bare == CURRENT {
+    let api_out = Command::new("curl")
+        .args(["-fsSL", &api_url])
+        .output()
+        .context("curl not found — install curl to use `precc update`")?;
+    if !api_out.status.success() {
+        bail!("Failed to reach GitHub API ({})", api_url);
+    }
+
+    let release: serde_json::Value =
+        serde_json::from_slice(&api_out.stdout).context("parsing GitHub API response")?;
+
+    let tag_name = release["tag_name"]
+        .as_str()
+        .context("missing tag_name in GitHub API response")?
+        .to_string();
+
+    // ── 3. Compare with running version ─────────────────────────────────────
+    let tag_bare = tag_name.trim_start_matches('v');
+    if !force && tag_bare == CURRENT {
         println!("Already on the latest version (v{CURRENT}). Use --force to reinstall.");
         return Ok(());
     }
-    if force && target_bare == CURRENT {
+    if force && tag_bare == CURRENT {
         println!("Reinstalling v{CURRENT} (--force)...");
     } else {
-        println!("Updating v{CURRENT} → {target_version}...");
+        println!("Updating v{CURRENT} → {tag_name}...");
     }
 
-    // ── 3. Detect platform ───────────────────────────────────────────────────
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    let target_triple = match (os, arch) {
-        ("linux", "x86_64")  => "x86_64-unknown-linux-gnu",
-        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("macos", "x86_64")  => "x86_64-apple-darwin",
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        _ => bail!("Unsupported platform {os}/{arch}. Download manually from https://github.com/{REPO}/releases"),
-    };
+    // ── 4. Pick the right asset for this platform ────────────────────────────
+    // The asset name may embed a different version string than the tag (deploy
+    // script sometimes mismatches), so we match by triple suffix rather than
+    // constructing the name from the tag.
+    let assets = release["assets"]
+        .as_array()
+        .context("no assets in release")?;
 
-    // ── 4. Locate install directory (where the running binary lives) ─────────
+    let (asset_name, download_url) =
+        update_pick_asset(assets, target_triple).with_context(|| {
+            let names: Vec<&str> = assets.iter().filter_map(|a| a["name"].as_str()).collect();
+            format!(
+                "No asset found for {target_triple} in release {tag_name}.\nAvailable: {names:?}"
+            )
+        })?;
+
+    // ── 5. Locate install directory ───────────────────────────────────────────
     let current_exe = std::env::current_exe().context("cannot determine current binary path")?;
     let bin_dir = current_exe
         .parent()
         .context("binary has no parent directory")?;
 
-    // ── 5. Download archive ──────────────────────────────────────────────────
-    let archive_name = format!("precc-{target_version}-{target_triple}.tar.gz");
-    let url =
-        format!("https://github.com/{REPO}/releases/download/{target_version}/{archive_name}");
+    // ── 6. Download archive ───────────────────────────────────────────────────
     let tmp_dir = tempfile::tempdir().context("creating temp dir")?;
-    let archive_path = tmp_dir.path().join(&archive_name);
+    let archive_path = tmp_dir.path().join(asset_name);
 
-    println!("Downloading {url}...");
+    println!("Downloading {download_url}...");
     let status = Command::new("curl")
         .args([
             "-fsSL",
             "--progress-bar",
             "-o",
             archive_path.to_str().unwrap(),
-            &url,
+            download_url,
         ])
         .status()
         .context("curl download failed")?;
     if !status.success() {
-        bail!("Download failed. Check that {target_version} exists at https://github.com/{REPO}/releases");
+        bail!(
+            "Download failed. Check https://github.com/{REPO}/releases/tag/{tag_name} \
+             for available assets."
+        );
     }
 
-    // ── 6. Extract ───────────────────────────────────────────────────────────
+    // ── 7. Extract and discover inner directory name ──────────────────────────
     println!("Extracting...");
     let status = Command::new("tar")
         .args([
@@ -1427,18 +1439,18 @@ fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
         bail!("Extraction failed");
     }
 
-    let extracted = tmp_dir
-        .path()
-        .join(format!("precc-{target_version}-{target_triple}"));
+    // The inner dir is the asset name minus ".tar.gz"
+    let inner_dir = asset_name.trim_end_matches(".tar.gz");
+    let extracted = tmp_dir.path().join(inner_dir);
 
-    // ── 7. Replace binaries ──────────────────────────────────────────────────
+    // ── 8. Replace binaries ───────────────────────────────────────────────────
     for bin in ["precc", "precc-hook", "precc-miner"] {
         let src = extracted.join(bin);
         let dst = bin_dir.join(bin);
         if !src.exists() {
             continue;
         }
-        // Rename current binary to .old so the running binary isn't locked (Linux allows this)
+        // Rename current binary to .old first (Linux allows replacing a running binary this way)
         let old = bin_dir.join(format!("{bin}.old"));
         if dst.exists() {
             std::fs::rename(&dst, &old).with_context(|| {
@@ -1446,7 +1458,6 @@ fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
             })?;
         }
         std::fs::copy(&src, &dst).with_context(|| format!("cannot write {dst:?}"))?;
-        // set executable
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1458,15 +1469,15 @@ fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
         println!("  Updated {}", dst.display());
     }
 
-    // ── 8. Print new version ─────────────────────────────────────────────────
+    // ── 9. Verify ─────────────────────────────────────────────────────────────
     println!();
     print!("Verifying... ");
     std::io::stdout().flush().ok();
-    if let Ok(out) = Command::new(current_exe).arg("--version").output() {
+    if let Ok(out) = Command::new(&current_exe).arg("--version").output() {
         print!("{}", String::from_utf8_lossy(&out.stdout).trim());
     }
     println!();
-    println!("PRECC updated to {target_version}. Run `precc init` if schemas changed.");
+    println!("PRECC updated to {tag_name}. Run `precc init` if schemas changed.");
     Ok(())
 }
 
@@ -1479,5 +1490,206 @@ fn truncate_str(s: &str, max_len: usize) -> &str {
         s
     } else {
         &s[..max_len]
+    }
+}
+
+// =============================================================================
+// Update helpers (testable, extracted from cmd_update)
+// =============================================================================
+
+/// Parse the platform target triple for the current OS/arch.
+fn update_target_triple() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        _ => None,
+    }
+}
+
+/// Given a slice of GitHub API asset objects, find the `.tar.gz` asset
+/// whose name contains `triple`. Returns `(asset_name, download_url)`.
+fn update_pick_asset<'a>(
+    assets: &'a [serde_json::Value],
+    triple: &str,
+) -> Option<(&'a str, &'a str)> {
+    assets.iter().find_map(|a| {
+        let name = a["name"].as_str()?;
+        let url = a["browser_download_url"].as_str()?;
+        if name.contains(triple) && name.ends_with(".tar.gz") {
+            Some((name, url))
+        } else {
+            None
+        }
+    })
+}
+
+/// Normalise a version string to always have a leading `v`.
+fn update_normalise_version(v: &str) -> String {
+    if v.starts_with('v') {
+        v.to_string()
+    } else {
+        format!("v{v}")
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── update_normalise_version ─────────────────────────────────────────────
+
+    #[test]
+    fn normalise_bare_semver() {
+        assert_eq!(update_normalise_version("0.2.0"), "v0.2.0");
+    }
+
+    #[test]
+    fn normalise_already_prefixed() {
+        assert_eq!(update_normalise_version("v0.2.0"), "v0.2.0");
+    }
+
+    #[test]
+    fn normalise_empty_string() {
+        assert_eq!(update_normalise_version(""), "v");
+    }
+
+    // ── update_target_triple ─────────────────────────────────────────────────
+
+    #[test]
+    fn target_triple_is_known() {
+        // On any CI/test host we support, must return Some.
+        assert!(
+            update_target_triple().is_some(),
+            "unknown platform: {}/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+    }
+
+    #[test]
+    fn target_triple_contains_arch() {
+        let triple = update_target_triple().unwrap();
+        let arch = std::env::consts::ARCH;
+        // "x86_64" or "aarch64" must appear verbatim in the triple
+        assert!(
+            triple.contains(arch),
+            "triple {triple:?} does not contain arch {arch:?}"
+        );
+    }
+
+    // ── update_pick_asset ────────────────────────────────────────────────────
+
+    fn make_assets(names: &[&str]) -> Vec<serde_json::Value> {
+        names
+            .iter()
+            .map(|n| {
+                json!({
+                    "name": n,
+                    "browser_download_url": format!("https://github.com/example/releases/download/v1/{n}")
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pick_asset_exact_triple() {
+        let assets = make_assets(&[
+            "precc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "precc-v0.1.1-aarch64-apple-darwin.tar.gz",
+        ]);
+        let (name, url) = update_pick_asset(&assets, "x86_64-unknown-linux-gnu").unwrap();
+        assert_eq!(name, "precc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz");
+        assert!(url.ends_with(name));
+    }
+
+    #[test]
+    fn pick_asset_tag_version_differs_from_asset_version() {
+        // Deploy script may tag v0.1.0 but assets are named v0.1.1 — must still match.
+        let assets = make_assets(&[
+            "precc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz",
+            "precc-v0.1.1-aarch64-unknown-linux-gnu.tar.gz",
+        ]);
+        let (name, _) = update_pick_asset(&assets, "aarch64-unknown-linux-gnu").unwrap();
+        assert_eq!(name, "precc-v0.1.1-aarch64-unknown-linux-gnu.tar.gz");
+    }
+
+    #[test]
+    fn pick_asset_ignores_non_targz() {
+        let assets = make_assets(&[
+            "precc-v0.1.0-x86_64-unknown-linux-gnu.zip", // wrong extension
+            "precc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+        ]);
+        let (name, _) = update_pick_asset(&assets, "x86_64-unknown-linux-gnu").unwrap();
+        assert_eq!(name, "precc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    }
+
+    #[test]
+    fn pick_asset_returns_none_when_no_match() {
+        let assets = make_assets(&["precc-v0.1.0-x86_64-apple-darwin.tar.gz"]);
+        assert!(update_pick_asset(&assets, "x86_64-unknown-linux-gnu").is_none());
+    }
+
+    #[test]
+    fn pick_asset_empty_list() {
+        assert!(update_pick_asset(&[], "x86_64-unknown-linux-gnu").is_none());
+    }
+
+    #[test]
+    fn pick_asset_prefers_first_match() {
+        // If somehow two assets match (shouldn't happen but be deterministic).
+        let assets = make_assets(&[
+            "precc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+            "precc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz",
+        ]);
+        let (name, _) = update_pick_asset(&assets, "x86_64-unknown-linux-gnu").unwrap();
+        assert_eq!(name, "precc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    }
+
+    // ── inner dir extraction (asset name → dir) ──────────────────────────────
+
+    #[test]
+    fn inner_dir_strips_tar_gz() {
+        let asset_name = "precc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz";
+        assert_eq!(
+            asset_name.trim_end_matches(".tar.gz"),
+            "precc-v0.1.1-x86_64-unknown-linux-gnu"
+        );
+    }
+
+    #[test]
+    fn inner_dir_no_double_strip() {
+        // Should not strip ".gz" and ".tar" separately
+        let asset_name = "precc-v0.1.1-x86_64-unknown-linux-gnu.tar.gz";
+        let inner = asset_name.trim_end_matches(".tar.gz");
+        assert!(!inner.ends_with(".tar"));
+    }
+
+    // ── version tag parsing from GitHub API (serde_json) ────────────────────
+
+    #[test]
+    fn parse_tag_name_from_release_json() {
+        let release = json!({ "tag_name": "v0.2.0", "assets": [] });
+        let tag = release["tag_name"].as_str().unwrap();
+        assert_eq!(tag, "v0.2.0");
+    }
+
+    #[test]
+    fn parse_tag_name_strips_v_for_comparison() {
+        let release = json!({ "tag_name": "v0.2.0" });
+        let tag = release["tag_name"].as_str().unwrap();
+        assert_eq!(tag.trim_start_matches('v'), "0.2.0");
+    }
+
+    #[test]
+    fn current_version_is_valid_semver_shape() {
+        let v = env!("CARGO_PKG_VERSION");
+        let parts: Vec<&str> = v.split('.').collect();
+        assert_eq!(parts.len(), 3, "expected major.minor.patch, got {v:?}");
+        for p in parts {
+            assert!(p.parse::<u32>().is_ok(), "non-numeric part {p:?} in {v:?}");
+        }
     }
 }
