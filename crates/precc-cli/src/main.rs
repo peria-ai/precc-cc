@@ -73,6 +73,15 @@ enum Commands {
         #[command(subcommand)]
         action: MailAction,
     },
+    /// Update PRECC binaries to the latest release
+    Update {
+        /// Force update even if already on the latest version
+        #[arg(long)]
+        force: bool,
+        /// Install a specific version (e.g. v0.2.0) instead of latest
+        #[arg(long)]
+        version: Option<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -160,6 +169,7 @@ fn main() -> Result<()> {
         }) => gif::cmd_gif(script, length, inputs),
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
+        Some(Commands::Update { force, version }) => cmd_update(force, version),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -1302,6 +1312,162 @@ fn cmd_mail(action: MailAction) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// =============================================================================
+// Update
+// =============================================================================
+
+/// Self-update PRECC binaries to the latest (or specified) GitHub release.
+fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
+    use std::io::Write;
+    use std::process::Command;
+
+    const REPO: &str = "yijunyu/precc-cc";
+    const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+    // ── 1. Resolve target version ────────────────────────────────────────────
+    let target_version = if let Some(v) = requested_version {
+        if v.starts_with('v') {
+            v
+        } else {
+            format!("v{v}")
+        }
+    } else {
+        println!("Checking latest release...");
+        let output = Command::new("curl")
+            .args([
+                "-fsSL",
+                &format!("https://api.github.com/repos/{REPO}/releases/latest"),
+            ])
+            .output()
+            .context("curl not found — install curl to use `precc update`")?;
+        if !output.status.success() {
+            bail!("Failed to reach GitHub API");
+        }
+        let body = String::from_utf8_lossy(&output.stdout);
+        // parse "tag_name": "v0.x.y"
+        body.lines()
+            .find(|l| l.contains("\"tag_name\""))
+            .and_then(|l| {
+                let s = l.find('"')?;
+                let rest = &l[s + 1..];
+                let s2 = rest.find('"')?;
+                let rest2 = &rest[s2 + 1..];
+                let s3 = rest2.find('"')?;
+                let e = rest2[s3 + 1..].find('"')?;
+                Some(rest2[s3 + 1..s3 + 1 + e].to_string())
+            })
+            .context("Could not parse latest release tag from GitHub API")?
+    };
+
+    // ── 2. Compare with running version ─────────────────────────────────────
+    let target_bare = target_version.trim_start_matches('v');
+    if !force && target_bare == CURRENT {
+        println!("Already on the latest version (v{CURRENT}). Use --force to reinstall.");
+        return Ok(());
+    }
+    if force && target_bare == CURRENT {
+        println!("Reinstalling v{CURRENT} (--force)...");
+    } else {
+        println!("Updating v{CURRENT} → {target_version}...");
+    }
+
+    // ── 3. Detect platform ───────────────────────────────────────────────────
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let target_triple = match (os, arch) {
+        ("linux", "x86_64")  => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("macos", "x86_64")  => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        _ => bail!("Unsupported platform {os}/{arch}. Download manually from https://github.com/{REPO}/releases"),
+    };
+
+    // ── 4. Locate install directory (where the running binary lives) ─────────
+    let current_exe = std::env::current_exe().context("cannot determine current binary path")?;
+    let bin_dir = current_exe
+        .parent()
+        .context("binary has no parent directory")?;
+
+    // ── 5. Download archive ──────────────────────────────────────────────────
+    let archive_name = format!("precc-{target_version}-{target_triple}.tar.gz");
+    let url =
+        format!("https://github.com/{REPO}/releases/download/{target_version}/{archive_name}");
+    let tmp_dir = tempfile::tempdir().context("creating temp dir")?;
+    let archive_path = tmp_dir.path().join(&archive_name);
+
+    println!("Downloading {url}...");
+    let status = Command::new("curl")
+        .args([
+            "-fsSL",
+            "--progress-bar",
+            "-o",
+            archive_path.to_str().unwrap(),
+            &url,
+        ])
+        .status()
+        .context("curl download failed")?;
+    if !status.success() {
+        bail!("Download failed. Check that {target_version} exists at https://github.com/{REPO}/releases");
+    }
+
+    // ── 6. Extract ───────────────────────────────────────────────────────────
+    println!("Extracting...");
+    let status = Command::new("tar")
+        .args([
+            "-xzf",
+            archive_path.to_str().unwrap(),
+            "-C",
+            tmp_dir.path().to_str().unwrap(),
+        ])
+        .status()
+        .context("tar extraction failed")?;
+    if !status.success() {
+        bail!("Extraction failed");
+    }
+
+    let extracted = tmp_dir
+        .path()
+        .join(format!("precc-{target_version}-{target_triple}"));
+
+    // ── 7. Replace binaries ──────────────────────────────────────────────────
+    for bin in ["precc", "precc-hook", "precc-miner"] {
+        let src = extracted.join(bin);
+        let dst = bin_dir.join(bin);
+        if !src.exists() {
+            continue;
+        }
+        // Rename current binary to .old so the running binary isn't locked (Linux allows this)
+        let old = bin_dir.join(format!("{bin}.old"));
+        if dst.exists() {
+            std::fs::rename(&dst, &old).with_context(|| {
+                format!("cannot move {dst:?} — try running with sudo or check permissions")
+            })?;
+        }
+        std::fs::copy(&src, &dst).with_context(|| format!("cannot write {dst:?}"))?;
+        // set executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))?;
+        }
+        if old.exists() {
+            let _ = std::fs::remove_file(&old);
+        }
+        println!("  Updated {}", dst.display());
+    }
+
+    // ── 8. Print new version ─────────────────────────────────────────────────
+    println!();
+    print!("Verifying... ");
+    std::io::stdout().flush().ok();
+    if let Ok(out) = Command::new(current_exe).arg("--version").output() {
+        print!("{}", String::from_utf8_lossy(&out.stdout).trim());
+    }
+    println!();
+    println!("PRECC updated to {target_version}. Run `precc init` if schemas changed.");
+    Ok(())
 }
 
 // =============================================================================
