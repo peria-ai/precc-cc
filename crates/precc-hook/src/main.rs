@@ -157,28 +157,75 @@ impl Pipeline {
             Err(_) => return,
         };
 
+        // Portfolio application: apply all compatible high-confidence skills.
+        //
+        // Conflict rule: at most one skill per action type may mutate the command
+        // (two `rewrite_command` or two `prepend_cd` actions would produce an
+        // incoherent command).  `suggest_fix` is always additive and never
+        // conflicts.  We track which mutating action types have already fired and
+        // skip any subsequent skill that would conflict.
+        let project_root = self.resolve_project_root();
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut used_mutating_types: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         for m in &matches {
-            if m.confidence >= AUTO_APPLY_THRESHOLD {
-                // Auto-apply: resolve project root for template.
-                // Skip prepend_cd skills when no better directory is known —
-                // applying `cd CWD && cmd` is a no-op rewrite that adds noise.
-                let project_root = self.resolve_project_root();
-                if m.action_type == "prepend_cd" {
-                    let cwd = std::env::current_dir()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    if project_root == cwd || project_root == "." {
-                        break; // No better directory found — skip skill
-                    }
+            if m.confidence < AUTO_APPLY_THRESHOLD {
+                // Below auto-apply threshold — surface as suggestion only
+                if m.action_type == "suggest_fix" {
+                    self.reasons.push(format!(
+                        "suggest:{} (conf={:.1})",
+                        m.skill_name, m.confidence
+                    ));
                 }
-                let rewritten = skills::apply_template(&m.template, &self.command, &project_root);
-                self.command = rewritten;
-                self.reasons
-                    .push(format!("skill:{} (conf={:.1})", m.skill_name, m.confidence));
-                // Append activation to log file for async processing by precc-miner.
-                // Single write() syscall (~10-50µs), fail-open silently.
-                append_activation_log(m.skill_id, &m.skill_name, m.confidence);
-                break; // Apply first matching high-confidence skill only
+                continue;
+            }
+
+            match m.action_type.as_str() {
+                "prepend_cd" => {
+                    // Skip if a cd was already prepended by an earlier skill
+                    if used_mutating_types.contains("prepend_cd") {
+                        continue;
+                    }
+                    // Skip if no better directory is known
+                    if project_root == cwd || project_root == "." {
+                        continue;
+                    }
+                    let rewritten =
+                        skills::apply_template(&m.template, &self.command, &project_root);
+                    self.command = rewritten;
+                    self.had_cd_prepend = true;
+                    used_mutating_types.insert("prepend_cd".to_string());
+                    self.reasons
+                        .push(format!("skill:{} (conf={:.1})", m.skill_name, m.confidence));
+                    append_activation_log(m.skill_id, &m.skill_name, m.confidence);
+                }
+                "rewrite_command" => {
+                    // Skip if a rewrite was already applied by an earlier skill
+                    if used_mutating_types.contains("rewrite_command") {
+                        continue;
+                    }
+                    let rewritten =
+                        skills::apply_template(&m.template, &self.command, &project_root);
+                    self.command = rewritten;
+                    used_mutating_types.insert("rewrite_command".to_string());
+                    self.reasons
+                        .push(format!("skill:{} (conf={:.1})", m.skill_name, m.confidence));
+                    append_activation_log(m.skill_id, &m.skill_name, m.confidence);
+                }
+                "suggest_fix" => {
+                    // Always additive — surface every suggestion above threshold
+                    self.reasons.push(format!(
+                        "suggest:{} (conf={:.1})",
+                        m.skill_name, m.confidence
+                    ));
+                    append_activation_log(m.skill_id, &m.skill_name, m.confidence);
+                }
+                _ => {
+                    // Unknown action type — skip safely
+                }
             }
         }
     }

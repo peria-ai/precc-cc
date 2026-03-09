@@ -1,0 +1,15 @@
+[skill]
+name = "token-portfolio"
+description = "Apply multiple compatible skills per command to maximize token savings. Composability rules: at most one prepend_cd and one rewrite_command per invocation; suggest_fix is always additive."
+source = "builtin"
+priority = 100
+
+[[triggers]]
+type = "command_regex"
+pattern = '.'
+weight = 0.1
+
+[[actions]]
+type = "suggest_fix"
+template = "PRECC applies all compatible high-confidence skills per command (portfolio mode). Use `precc skills list` to see active skills and their confidence scores."
+confidence = 0.4
