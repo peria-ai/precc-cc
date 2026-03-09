@@ -192,6 +192,10 @@ fn cmd_init() -> Result<()> {
             "zerowarns",
             include_str!("../../../skills/builtin/zerowarns.toml"),
         ),
+        (
+            "jj-translate",
+            include_str!("../../../skills/builtin/jj-translate.toml"),
+        ),
     ];
     let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;
     if loaded > 0 {

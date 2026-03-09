@@ -286,6 +286,18 @@ impl Pipeline {
         // We need to rewrite the actual command part, not the cd prefix.
         let (prefix, cmd_part) = split_cd_prefix(&self.command);
 
+        // jj translation takes priority: if the repo uses jj, translate git → jj first.
+        if let Some(rewritten) = rtk::jj_translate(cmd_part) {
+            self.command = if prefix.is_empty() {
+                rewritten
+            } else {
+                format!("{}{}", prefix, rewritten)
+            };
+            self.had_rtk_rewrite = true;
+            self.reasons.push("jj-translate".to_string());
+            return;
+        }
+
         if let Some(rewritten) = rtk::rewrite(cmd_part) {
             self.command = if prefix.is_empty() {
                 rewritten

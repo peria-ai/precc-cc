@@ -1,0 +1,20 @@
+[skill]
+name = "jj-translate"
+description = "Translate git commands to jj (Jujutsu) equivalents in colocated repos. jj eliminates staging, enables parallel revisions, and produces compact log output — reducing git-related token overhead."
+source = "builtin"
+priority = 90
+
+[[triggers]]
+type = "command_regex"
+pattern = '^git\s+'
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = ".jj"
+weight = 0.9
+
+[[actions]]
+type = "suggest_fix"
+template = "This repo uses jj (Jujutsu). Consider: `jj st` (status), `jj log` (log), `jj diff` (diff), `jj commit` (commit -a), `jj new` (new branch), `jj git push` (push). Run `jj help` for full reference."
+confidence = 0.75

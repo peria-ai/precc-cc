@@ -615,6 +615,74 @@ pub fn rewrite(command: &str) -> Option<String> {
     None
 }
 
+/// Translate a git command to its jj (Jujutsu) equivalent.
+///
+/// Only fires when:
+/// 1. `jj` is on PATH
+/// 2. The current working directory (or any ancestor up to 5 levels) has a `.jj/` directory
+///    (i.e., it's a jujutsu-colocated repo)
+///
+/// Returns `Some(jj_command)` if the git command has a known jj translation,
+/// `None` otherwise (caller falls through to RTK rewriting).
+pub fn jj_translate(command: &str) -> Option<String> {
+    // Must start with "git " to be translatable
+    if !command.starts_with("git ") {
+        return None;
+    }
+    // Skip if jj is unavailable or not in a jj repo
+    if !jj_available() || !in_jj_repo() {
+        return None;
+    }
+
+    let rest = &command[4..]; // strip "git "
+    translate_git_to_jj(rest)
+}
+
+/// Check if `jj` binary is available on PATH (cached).
+fn jj_available() -> bool {
+    static AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
+        if let Ok(home) = std::env::var("HOME") {
+            let common = [
+                format!("{home}/.cargo/bin/jj"),
+                "/usr/local/bin/jj".to_string(),
+                "/usr/bin/jj".to_string(),
+            ];
+            for path in &common {
+                if std::path::Path::new(path).is_file() {
+                    return true;
+                }
+            }
+        }
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in path_var.split(':') {
+                if std::path::Path::new(dir).join("jj").is_file() {
+                    return true;
+                }
+            }
+        }
+        false
+    });
+    *AVAILABLE
+}
+
+/// Check if the current working directory is inside a jj-colocated repo
+/// (has a `.jj/` directory within 5 ancestor levels).
+fn in_jj_repo() -> bool {
+    let mut dir = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    for _ in 0..5 {
+        if dir.join(".jj").is_dir() {
+            return true;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    false
+}
+
 /// Check if a command starts with a prefix, followed by whitespace or end of string.
 /// This ensures "git status" matches "git status --short" but not "git statusbar".
 fn matches_prefix(command: &str, prefix: &str) -> bool {
@@ -677,6 +745,62 @@ fn rtk_available() -> bool {
         false
     });
     *AVAILABLE
+}
+
+/// Internal: translate git subcommand (everything after "git ") to jj equivalent.
+/// Exposed for unit testing without requiring jj installation or a .jj repo.
+#[doc(hidden)]
+pub fn translate_git_to_jj(rest: &str) -> Option<String> {
+    let translated = if rest == "status" || rest.starts_with("status ") {
+        rest.replacen("status", "jj st", 1)
+    } else if rest == "log" || rest.starts_with("log ") {
+        rest.replacen("log", "jj log", 1)
+    } else if rest == "diff" || rest.starts_with("diff ") {
+        rest.replacen("diff", "jj diff", 1)
+    } else if rest.starts_with("commit -a") || rest == "commit" {
+        "jj commit".to_string()
+    } else if rest.starts_with("add ") || rest == "add" {
+        return Some("true # jj: changes are implicitly staged, no git add needed".to_string());
+    } else if let Some(branch) = rest.strip_prefix("checkout -b ") {
+        format!("jj new -B {}", branch.trim())
+    } else if let Some(rev) = rest.strip_prefix("checkout ") {
+        format!("jj edit {}", rev.trim())
+    } else if let Some(branch) = rest.strip_prefix("switch -c ") {
+        format!("jj new -B {}", branch.trim())
+    } else if let Some(rev) = rest.strip_prefix("switch ") {
+        format!("jj edit {}", rev.trim())
+    } else if let Some(name) = rest.strip_prefix("branch -D ") {
+        format!("jj bookmark delete {}", name.trim())
+    } else if let Some(name) = rest.strip_prefix("branch -d ") {
+        format!("jj bookmark delete {}", name.trim())
+    } else if rest == "branch" || rest.starts_with("branch ") {
+        rest.replacen("branch", "jj bookmark list", 1)
+    } else if rest.starts_with("push ") || rest == "push" {
+        rest.replacen("push", "jj git push", 1)
+    } else if rest.starts_with("fetch ") || rest == "fetch" {
+        rest.replacen("fetch", "jj git fetch", 1)
+    } else if rest.starts_with("pull ") || rest == "pull" {
+        "jj git fetch && jj rebase -d main@origin".to_string()
+    } else if let Some(args) = rest.strip_prefix("rebase ") {
+        format!("jj rebase -d {}", args.trim())
+    } else if let Some(rev) = rest.strip_prefix("cherry-pick ") {
+        format!("jj duplicate {} -d @", rev.trim())
+    } else if let Some(rev) = rest.strip_prefix("revert ") {
+        format!("jj backout -r {}", rev.trim())
+    } else if rest.starts_with("stash") {
+        "jj new # jj: use 'jj new' to create an anonymous change instead of stash".to_string()
+    } else if let Some(path) = rest.strip_prefix("worktree add ") {
+        format!("jj workspace add {}", path.trim())
+    } else if rest == "worktree list" || rest.starts_with("worktree list ") {
+        "jj workspace list".to_string()
+    } else if let Some(file) = rest.strip_prefix("blame ") {
+        format!("jj file annotate {}", file.trim())
+    } else if rest.starts_with("show ") || rest == "show" {
+        rest.replacen("show", "jj diff -r", 1)
+    } else {
+        return None;
+    };
+    Some(translated)
 }
 
 #[cfg(test)]
@@ -867,5 +991,98 @@ mod tests {
         // tokens_saved should strip the cd prefix before matching
         assert_eq!(tokens_saved("cd /foo && cargo build"), 420);
         assert_eq!(tokens_saved("cd /foo && make"), 400);
+    }
+
+    // --- jj_translate tests ---
+    // These tests exercise the translation logic directly without requiring
+    // jj to be installed or a .jj directory to exist. We test the internal
+    // mapping by bypassing the availability/repo checks.
+
+    #[test]
+    fn jj_translate_not_git_command() {
+        // Non-git commands must not translate (returns None before any check)
+        // We test with a fake availability scenario by directly verifying
+        // that non-git input is rejected at the first guard.
+        // Since jj is not installed in CI, jj_translate returns None for all.
+        assert_eq!(jj_translate("cargo build"), None);
+        assert_eq!(jj_translate("ls -la"), None);
+        assert_eq!(jj_translate("jj log"), None);
+    }
+
+    #[test]
+    fn jj_translate_mapping_logic() {
+        // Test the internal translation mapping via a helper that bypasses
+        // the jj_available()/in_jj_repo() guards.
+        assert_eq!(translate_git_to_jj("status"), Some("jj st".to_string()));
+        assert_eq!(
+            translate_git_to_jj("status --short"),
+            Some("jj st --short".to_string())
+        );
+        assert_eq!(translate_git_to_jj("log"), Some("jj log".to_string()));
+        assert_eq!(
+            translate_git_to_jj("log --oneline"),
+            Some("jj log --oneline".to_string())
+        );
+        assert_eq!(translate_git_to_jj("diff"), Some("jj diff".to_string()));
+        assert_eq!(
+            translate_git_to_jj("diff HEAD"),
+            Some("jj diff HEAD".to_string())
+        );
+        assert_eq!(translate_git_to_jj("commit"), Some("jj commit".to_string()));
+        assert_eq!(
+            translate_git_to_jj("commit -am 'msg'"),
+            Some("jj commit".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("checkout main"),
+            Some("jj edit main".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("checkout -b feature"),
+            Some("jj new -B feature".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("switch -c topic"),
+            Some("jj new -B topic".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("branch"),
+            Some("jj bookmark list".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("branch -D old"),
+            Some("jj bookmark delete old".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("push origin main"),
+            Some("jj git push origin main".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("fetch"),
+            Some("jj git fetch".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("cherry-pick abc123"),
+            Some("jj duplicate abc123 -d @".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("revert abc123"),
+            Some("jj backout -r abc123".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("worktree add ../other"),
+            Some("jj workspace add ../other".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("worktree list"),
+            Some("jj workspace list".to_string())
+        );
+        assert_eq!(
+            translate_git_to_jj("blame src/main.rs"),
+            Some("jj file annotate src/main.rs".to_string())
+        );
+        // Unknown subcommands return None
+        assert_eq!(translate_git_to_jj("bisect start"), None);
+        assert_eq!(translate_git_to_jj("submodule update"), None);
     }
 }
