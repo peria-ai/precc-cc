@@ -20,10 +20,12 @@ regex = "1"
 toml = "0.8"
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
 hkdf = "0.12"
+hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 obfstr = "0.4"
 clap = { version = "4", features = ["derive"] }
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "rustls-tls", "builder"] }
 libc = "0.2"
 tempfile = "3"
 

@@ -1,103 +1,101 @@
 #!/usr/bin/env bash
 # PRECC demo — Business Investor / Non-Technical VC
-# Shows: dollar savings, scaling economics, one-command install, ROI
+# Shows: dollar savings, 万界方舟 multiplier, license tiers, email reporting, market
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PRECC="$REPO_ROOT/target/release/precc"
 
-t() { printf '\033[1;35m▶ %s\033[0m\n' "$*"; }
+t() { printf '\033[1;34m▶ %s\033[0m\n' "$*"; }
 ok() { printf '\033[0;32m✓ %s\033[0m\n' "$*"; }
 dim() { printf '\033[2m%s\033[0m\n' "$*"; }
+money() { printf '\033[1;33m%s\033[0m\n' "$*"; }
 
 sleep 0.3
 
-# ── 1. The headline ───────────────────────────────────────────────────────────
-t "THE HEADLINE"
+# ── 1. The problem in one sentence ────────────────────────────────────────────
+t "THE PROBLEM — 34% of Claude Code spend is wasted"
 echo ""
-printf '\033[1;32m'
-echo "  PRECC saves \$1,200 per developer per year on Claude Code costs."
-echo "  Automatically. With zero configuration."
-printf '\033[0m\n'
-dim "  Based on measured 34% savings on \$3,600/yr Claude Code Pro spend."
-dim "  Not a projection — from 29 real sessions across 5 projects."
+printf '  Every developer using Claude Code wastes money on commands that\n'
+printf '  fail and retry. PRECC prevents it. Automatically. In 3ms.\n'
 echo ""
-sleep 1.0
+money "  $878 spent without PRECC → $582 with PRECC → $296 saved (34%)"
+echo ""
+sleep 0.8
 
-# ── 2. The story ──────────────────────────────────────────────────────────────
-t "THE STORY — \$878 → \$582"
-echo ""
-printf '  Before PRECC:  \033[0;31m\$878\033[0m for the same work\n'
-sleep 0.4
-printf '  After  PRECC:  \033[0;32m\$582\033[0m for the same work\n'
-sleep 0.4
-printf '  Saved:         \033[1;32m\$296  (34%%)\033[0m\n'
-echo ""
-dim "  \$296 was wasted on commands that failed immediately —"
-dim "  wrong directory, missing dependency — forcing Claude to retry."
-echo ""
-sleep 1.0
-
-# ── 3. Install ────────────────────────────────────────────────────────────────
-t "INSTALL — One command, no configuration"
+# ── 2. Install ────────────────────────────────────────────────────────────────
+t "THE PRODUCT — One command to deploy"
 echo ""
 dim "  \$ curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
-sleep 0.5
-echo "  Downloading precc v0.1.0 ..."
-echo "  Installing to ~/.local/bin/ ..."
-echo "  Configuring Claude Code hook ..."
-ok "Done. Next Claude Code session: PRECC is active."
-echo ""
 sleep 0.4
-dim "  \$ precc init"
-"$PRECC" init 2>&1 | grep -E "(OK|Encryption|Loaded)" | head -6 || true
-echo ""
-sleep 0.8
-
-# ── 4. Mine and report ────────────────────────────────────────────────────────
-t "ROI REPORT — Auditable per-developer data"
-dim "  \$ precc ingest --force demo/session.jsonl"
-sleep 0.3
-"$PRECC" ingest --force "$REPO_ROOT/demo/session.jsonl" 2>&1
-echo ""
-sleep 0.4
-dim "  \$ precc savings"
-sleep 0.3
-"$PRECC" savings 2>&1 | head -25 || true
-echo ""
-sleep 0.8
-
-# ── 5. Scaling table ──────────────────────────────────────────────────────────
-t "SCALING ECONOMICS"
-echo ""
-printf '  %-25s  %-15s  %-15s\n' "Team size" "Monthly savings" "Annual savings"
-printf '  %-25s  %-15s  %-15s\n' "─────────────────────────" "───────────────" "───────────────"
-printf '  %-25s  \033[0;32m%-15s\033[0m  \033[0;32m%-15s\033[0m\n' "1 developer"         "\$68/month"   "\$816/year"
-sleep 0.2
-printf '  %-25s  \033[0;32m%-15s\033[0m  \033[0;32m%-15s\033[0m\n' "10-person team"      "\$680/month"  "\$8,160/year"
-sleep 0.2
-printf '  %-25s  \033[0;32m%-15s\033[0m  \033[0;32m%-15s\033[0m\n' "100-person org"      "\$6,800/month" "\$81,600/year"
-echo ""
-sleep 0.8
-
-# ── 6. Business model ─────────────────────────────────────────────────────────
-t "BUSINESS MODEL"
-echo ""
-echo "  Open-core:"
-echo "    • Core savings + mining: open source"
-echo "    • Team heuristics sync, dashboard, SOC-2 audit: premium"
-echo ""
-echo "  Per-seat SaaS:  \$10–20/month"
-echo "    → 34% savings on \$200/month Claude = 3–10× ROI on subscription"
-echo ""
-echo "  Skills marketplace: teams publish & subscribe to correction patterns"
+echo "  Downloading ..."
+ok "Done. No configuration. Works immediately."
 echo ""
 sleep 0.5
 
-printf '\033[1;35m'
-echo "  ┌──────────────────────────────────────────────────────────┐"
-echo "  │  Day-one ROI  •  No ramp-up  •  Open-core + SaaS        │"
-echo "  │  \$1,200 / developer / year — measured, not modelled     │"
-echo "  └──────────────────────────────────────────────────────────┘"
+# ── 3. The compound saving ────────────────────────────────────────────────────
+t "THE OPPORTUNITY — Two independent multipliers"
+echo ""
+printf '  \033[2mBaseline (Anthropic official pricing):\033[0m\n'
+money "  $878  →  $878 × 0.66 (PRECC)  =  $580"
+echo ""
+sleep 0.4
+printf '  \033[2mWith 万界方舟 API proxy (52%% of official):\033[0m\n'
+money "  $878  →  $878 × 0.52 × 0.66   =  $301"
+echo ""
+printf '  \033[1;32m66%% total saving — two independent multipliers\033[0m\n'
+printf '  \033[2m(PRECC and API pricing are orthogonal — each makes the other more valuable)\033[0m\n'
+echo ""
+sleep 0.8
+
+# ── 4. ROI by team size ───────────────────────────────────────────────────────
+t "ROI — Scales linearly with team size"
+echo ""
+printf '  \033[1m%-15s %-20s %-20s %-20s\033[0m\n' "Team" "Monthly spend" "PRECC saving" "With proxy (66%%)"
+printf '  %s\n' "---------------------------------------------------------------------"
+for row in "10 devs|$2,000|$680/mo|$1,320/mo" "50 devs|$10,000|$3,400/mo|$6,600/mo" "100 devs|$20,000|$6,800/mo|$13,200/mo"; do
+    IFS='|' read -r team spend saving proxy <<< "$row"
+    printf '  %-15s %-20s %-20s \033[1;32m%-20s\033[0m\n' "$team" "$spend" "$saving" "$proxy"
+    sleep 0.2
+done || true
+echo ""
+sleep 0.6
+
+# ── 5. License tiers ─────────────────────────────────────────────────────────
+t "BUSINESS MODEL — License tiers + skills marketplace"
+echo ""
+printf '  \033[2mTier       Features                         Price target\033[0m\n'
+printf '  Community  Core savings + mining         Free forever\n'
+printf '  Pro        Priority support              $10-20/month\n'
+printf '  Team       Heuristics sync across devs  $50-100/team/mo\n'
+printf '  Enterprise SOC-2, audit log, SMTP report Custom\n'
+echo ""
+dim "  \$ precc license status"
+"$PRECC" license status 2>&1 || true
+echo ""
+sleep 0.6
+
+# ── 6. Email reporting ────────────────────────────────────────────────────────
+t "REPORTING — Email savings directly to procurement"
+echo ""
+printf '  \033[2mConfigure once:\033[0m\n'
+dim "  \$ precc mail setup"
+sleep 0.3
+printf '  Created ~/.config/precc/mail.toml\n'
+echo ""
+printf '  \033[2mDeliver weekly:\033[0m\n'
+dim "  \$ precc mail report cfo@yourcompany.com"
+sleep 0.3
+ok "Report sent. Auditable ROI, delivered to inbox."
+echo ""
+sleep 0.6
+
+# ── 7. Summary ────────────────────────────────────────────────────────────────
+printf '\033[1;32m'
+echo "  ┌──────────────────────────────────────────────────────────────────┐"
+echo "  │  PRECC — The efficiency layer for every Claude Code team.        │"
+echo "  │  34% saving standalone  •  66% with API proxy  •  Day-1 ROI     │"
+echo "  │  License keys  •  SMTP reports  •  Skills marketplace            │"
+echo "  └──────────────────────────────────────────────────────────────────┘"
 printf '\033[0m\n'
 sleep 0.5

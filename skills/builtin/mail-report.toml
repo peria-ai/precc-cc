@@ -1,0 +1,15 @@
+[skill]
+name = "mail-report"
+description = "After running precc report or precc savings, offer to email the results to a recipient via SMTP."
+source = "builtin"
+priority = 50
+
+[[triggers]]
+type = "command_regex"
+pattern = '^precc\s+(report|savings)\b'
+weight = 0.9
+
+[[actions]]
+type = "suggest_fix"
+template = "Share results by email: `precc mail report <recipient@example.com>`. Configure SMTP first with `precc mail setup` if not done yet."
+confidence = 0.7

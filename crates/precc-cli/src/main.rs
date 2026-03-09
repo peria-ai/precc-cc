@@ -9,11 +9,12 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use precc_core::{db, gdb, metrics, mining, rtk, skills};
+use precc_core::{db, gdb, license, metrics, mining, rtk, skills};
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
 
 mod gif;
+mod mail;
 
 #[derive(Parser)]
 #[command(name = "precc", about = "Predictive Error Correction for Claude Code")]
@@ -62,6 +63,59 @@ enum Commands {
         /// Expected user inputs (quoted strings, piped to script stdin)
         inputs: Vec<String>,
     },
+    /// Manage PRECC license key
+    License {
+        #[command(subcommand)]
+        action: LicenseAction,
+    },
+    /// Send reports and documents via email
+    Mail {
+        #[command(subcommand)]
+        action: MailAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum MailAction {
+    /// Configure SMTP settings (creates ~/.config/precc/mail.toml)
+    Setup,
+    /// Send a savings report to an email address
+    Report {
+        /// Recipient email address
+        to: String,
+        /// Files to attach (PDF, PPTX, GIF, etc.)
+        #[arg(long = "attach", short = 'a')]
+        attachments: Vec<std::path::PathBuf>,
+    },
+    /// Send an arbitrary file to an email address
+    Send {
+        /// Recipient email address
+        to: String,
+        /// Subject line
+        #[arg(long, short, default_value = "From PRECC")]
+        subject: String,
+        /// Body text
+        #[arg(long, short, default_value = "")]
+        body: String,
+        /// Files to attach
+        #[arg(long = "attach", short = 'a')]
+        attachments: Vec<std::path::PathBuf>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum LicenseAction {
+    /// Activate a license key
+    Activate {
+        /// License key (format: PRECC-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX)
+        key: String,
+    },
+    /// Show current license status
+    Status,
+    /// Deactivate (remove) the stored license key
+    Deactivate,
+    /// Show this machine's fingerprint (for generating machine-bound keys)
+    Fingerprint,
 }
 
 #[derive(clap::Subcommand)]
@@ -104,6 +158,8 @@ fn main() -> Result<()> {
             length,
             inputs,
         }) => gif::cmd_gif(script, length, inputs),
+        Some(Commands::License { action }) => cmd_license(action),
+        Some(Commands::Mail { action }) => cmd_mail(action),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -195,6 +251,10 @@ fn cmd_init() -> Result<()> {
         (
             "jj-translate",
             include_str!("../../../skills/builtin/jj-translate.toml"),
+        ),
+        (
+            "mail-report",
+            include_str!("../../../skills/builtin/mail-report.toml"),
         ),
     ];
     let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;
@@ -1154,6 +1214,94 @@ fn cmd_savings() -> Result<()> {
     );
 
     Ok(())
+}
+
+// =============================================================================
+// License
+// =============================================================================
+
+fn cmd_license(action: LicenseAction) -> Result<()> {
+    match action {
+        LicenseAction::Activate { key } => {
+            let lic = license::activate(&key)?;
+            println!("License activated successfully.");
+            println!("  Edition:        {}", lic.edition_name());
+            println!(
+                "  Machine-bound:  {}",
+                if lic.machine_bound { "yes" } else { "no" }
+            );
+            if lic.expiry_days > 0 {
+                println!(
+                    "  Expires:        day {} (Unix epoch days)",
+                    lic.expiry_days
+                );
+            } else {
+                println!("  Expires:        never");
+            }
+            Ok(())
+        }
+        LicenseAction::Status => {
+            match license::load()? {
+                Some(lic) => {
+                    println!("License status: ACTIVE");
+                    println!("  Edition:        {}", lic.edition_name());
+                    println!(
+                        "  Machine-bound:  {}",
+                        if lic.machine_bound { "yes" } else { "no" }
+                    );
+                    if lic.expiry_days > 0 {
+                        println!(
+                            "  Expires:        day {} (Unix epoch days)",
+                            lic.expiry_days
+                        );
+                    } else {
+                        println!("  Expires:        never");
+                    }
+                }
+                None => {
+                    println!("License status: COMMUNITY (no key activated)");
+                    println!("  All core features available. Activate a Pro/Team key for");
+                    println!("  priority support and enterprise features.");
+                }
+            }
+            Ok(())
+        }
+        LicenseAction::Deactivate => {
+            license::deactivate()?;
+            println!("License key removed. Running in community mode.");
+            Ok(())
+        }
+        LicenseAction::Fingerprint => {
+            let fp = license::machine_fingerprint();
+            println!(
+                "Machine fingerprint: {:02x}{:02x}{:02x}{:02x}",
+                fp[0], fp[1], fp[2], fp[3]
+            );
+            println!("(Provide this to generate a machine-bound license key)");
+            Ok(())
+        }
+    }
+}
+
+// =============================================================================
+// Mail
+// =============================================================================
+
+fn cmd_mail(action: MailAction) -> Result<()> {
+    match action {
+        MailAction::Setup => mail::cmd_mail_setup(),
+        MailAction::Report { to, attachments } => mail::cmd_mail_report(&to, &attachments),
+        MailAction::Send {
+            to,
+            subject,
+            body,
+            attachments,
+        } => {
+            mail::send_mail(&to, &subject, &body, &attachments)?;
+            println!("Email sent to {to}");
+            Ok(())
+        }
+    }
 }
 
 // =============================================================================

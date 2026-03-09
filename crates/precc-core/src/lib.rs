@@ -3,6 +3,7 @@
 pub mod context;
 pub mod db;
 pub mod gdb;
+pub mod license;
 pub mod metrics;
 pub mod mining;
 pub mod promote;

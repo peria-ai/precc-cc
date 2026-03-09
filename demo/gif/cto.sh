@@ -1,117 +1,108 @@
 #!/usr/bin/env bash
 # PRECC demo — Enterprise CTO / Procurement Buyer
-# Shows: security architecture, zero-network, AES-256, fail-open, ROI report
+# Shows: security, license enforcement, SMTP audit reports, fail-open, ROI
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PRECC="$REPO_ROOT/target/release/precc"
-HOOK="$REPO_ROOT/target/release/precc-hook"
-DB_FILE="$HOME/.local/share/precc/heuristics.db"
 
 t() { printf '\033[1;31m▶ %s\033[0m\n' "$*"; }
 ok() { printf '\033[0;32m✓ %s\033[0m\n' "$*"; }
-warn() { printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
 dim() { printf '\033[2m%s\033[0m\n' "$*"; }
+secure() { printf '\033[0;36m🔒 %s\033[0m\n' "$*"; }
 
 sleep 0.3
 
-# ── 1. Security architecture ─────────────────────────────────────────────────
-t "ENTERPRISE SECURITY ARCHITECTURE"
+# ── 1. Security architecture ──────────────────────────────────────────────────
+t "SECURITY — Zero-network, fail-open, encrypted at rest"
 echo ""
-printf '\033[0;32m'
-echo "  ✓ AES-256 encryption  — all databases via SQLCipher"
-echo "  ✓ Key derivation      — HKDF-SHA256(machine-ID + username)"
-echo "  ✓ Zero network calls  — hook binary makes no outbound connections"
-echo "  ✓ Fail-open design    — PRECC crash → exit 0 (Claude Code unaffected)"
-echo "  ✓ Reproducible builds — source-available, auditable"
-printf '\033[0m\n'
+secure "Data at rest:    AES-256 via SQLCipher"
+sleep 0.2
+secure "Key derivation:  HKDF-SHA256(machine-id + username)"
+sleep 0.2
+secure "Network calls:   ZERO at runtime"
+sleep 0.2
+secure "SMTP:            Only when explicitly invoked by user"
+sleep 0.2
+secure "Fail-open:       Hook crash → Claude Code unaffected (exit 0)"
+sleep 0.2
+secure "License:         HMAC-SHA256, machine-bound keys"
 echo ""
-sleep 1.0
+sleep 0.6
 
-# ── 2. Init showing encryption ────────────────────────────────────────────────
-t "DEPLOY — Single command, no restart required"
+# ── 2. License enforcement ────────────────────────────────────────────────────
+t "LICENSE — Machine-bound key enforcement"
 echo ""
-dim "  \$ curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
+printf '  Format: PRECC-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX\n'
+printf '  \n'
+printf '  Payload:  machine_tag(4B) | expiry_days(4B) | edition_flags(4B)\n'
+printf '  MAC:      HMAC-SHA256(payload)[0..4] with build-time secret\n'
+printf '  Binding:  SHA-256(hostname+username)[0..4]\n'
+printf '  \n'
+printf '  Copied key on different machine: \033[0;31mMAC valid but fingerprint mismatch → rejected\033[0m\n'
+echo ""
+dim "  \$ precc license fingerprint"
+"$PRECC" license fingerprint 2>&1 || true
+echo ""
+dim "  \$ precc license status"
+"$PRECC" license status 2>&1 || true
+echo ""
+sleep 0.6
+
+# ── 3. Audit and reporting ────────────────────────────────────────────────────
+t "AUDIT — Per-engineer ROI reports delivered by email"
+echo ""
+dim "  \$ precc report"
+"$PRECC" report 2>&1 | head -20 || true
+echo ""
+printf '  \033[2mDeliver to procurement:\033[0m\n'
+dim "  \$ precc mail setup   # one-time SMTP config"
+dim "  \$ precc mail report ciso@yourco.com --attach report.txt"
 sleep 0.4
-echo "  Downloading signed binary ..."
-echo "  Installing to ~/.local/bin/ ..."
-echo "  Writing hook entry to ~/.claude/settings.json ..."
-ok "No Claude Code restart required — hooks load per-session"
+ok "Auditable per-machine data emailed. No dashboard required."
 echo ""
+sleep 0.5
+
+# ── 4. Deployment ─────────────────────────────────────────────────────────────
+t "DEPLOYMENT — Three commands, all platforms"
+echo ""
+printf '  \033[1m# Install\033[0m\n'
+dim "  \$ curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
+printf '  \033[1m# Initialise\033[0m\n'
 dim "  \$ precc init"
-sleep 0.3
-"$PRECC" init 2>&1 | grep -E "(Encryption|AES|OK|Loaded|Migrated)" | head -8 || true
+printf '  \033[1m# Activate enterprise license\033[0m\n'
+dim "  \$ precc license activate PRECC-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"
 echo ""
-sleep 0.8
-
-# ── 3. Inspect encrypted DB ───────────────────────────────────────────────────
-t "VERIFY ENCRYPTION — No plaintext SQL on disk"
-echo ""
-if [ -f "$DB_FILE" ]; then
-    dim "  \$ xxd $DB_FILE | head -2"
-    xxd "$DB_FILE" 2>/dev/null | head -2 || od -A x -t x1z "$DB_FILE" 2>/dev/null | head -2 || true
-    echo ""
-    printf '  \033[2mPlain SQLite magic: 53 51 4c 69 74 65 20 66 6f 72 6d 61 74 20 33\033[0m\n'
-    ok "Encrypted header — database unreadable on any other machine"
-else
-    warn "Run precc init first to create encrypted databases"
-fi
-echo ""
-sleep 0.8
-
-# ── 4. Verify zero network calls ─────────────────────────────────────────────
-t "ZERO NETWORK CALLS — Verified by strace"
-echo ""
-dim "  \$ strace -e trace=network echo '{\"tool_input\":{\"command\":\"cargo build\"}}' | precc-hook 2>&1 | grep -c socket"
-printf '  Result: \033[0;32m0\033[0m (no socket() calls)\n'
-ok "Hook reads stdin → queries local SQLite → writes stdout. No network."
-echo ""
-sleep 0.8
-
-# ── 5. Fail-open demonstration ────────────────────────────────────────────────
-t "FAIL-OPEN DESIGN — PRECC crash never blocks Claude Code"
-echo ""
-echo "  If precc-hook exits with any error:"
-printf '    hook exit code  → \033[0;32m0\033[0m  (Claude Code proceeds unchanged)\n'
-printf '    command passed  → \033[0;32munmodified original\033[0m\n'
-printf '    Claude Code     → \033[0;32munaffected\033[0m\n'
-echo ""
-dim "  This is non-negotiable for production use."
-echo ""
-sleep 0.8
-
-# ── 6. ROI report for procurement ─────────────────────────────────────────────
-t "ROI REPORT — Per-engineer data for procurement"
-dim "  \$ precc ingest --force demo/session.jsonl && precc report"
-sleep 0.3
-"$PRECC" ingest --force "$REPO_ROOT/demo/session.jsonl" 2>&1
-echo ""
-"$PRECC" report 2>&1 | head -22 || true
-echo ""
-sleep 0.5
-dim "  \$ precc savings"
-sleep 0.3
-"$PRECC" savings 2>&1 | head -20 || true
+printf '  Platforms: Linux x86_64/ARM64  •  macOS Intel/ARM  •  Windows x86_64\n'
+printf '  No Claude Code restart required.\n'
 echo ""
 sleep 0.5
 
-# ── 7. Risk table ─────────────────────────────────────────────────────────────
-t "RISK ASSESSMENT"
+# ── 5. Risk matrix ────────────────────────────────────────────────────────────
+t "RISK — All mitigated"
 echo ""
-printf '  %-28s  %s\n' "Risk" "Mitigation"
-printf '  %-28s  %s\n' "────────────────────────────" "──────────────────────────────────────"
-printf '  %-28s  %s\n' "PRECC crashes"            "Fail-open: Claude Code unaffected"
-printf '  %-28s  %s\n' "Wrong correction applied"  "Conf threshold 0.7; logged for review"
-printf '  %-28s  %s\n' "Data exfiltration"        "No network; encrypted + local"
-printf '  %-28s  %s\n' "Dependency on PRECC"      "Remove hook entry from settings.json"
+printf '  %-30s %s\n' "Risk" "Mitigation"
+printf '  %s\n' "------------------------------------------------------"
+for row in \
+    "PRECC crashes|Fail-open: Claude Code unaffected" \
+    "Wrong correction|conf ≥ 0.7 threshold; logged" \
+    "Data exfiltration|Zero network; AES-256 local" \
+    "License abuse|Machine-bound keys reject copies" \
+    "Vendor lock-in|Remove 1 line from settings.json"
+do
+    IFS='|' read -r risk mit <<< "$row"
+    printf '  \033[0;31m%-30s\033[0m \033[0;32m%s\033[0m\n' "$risk" "$mit"
+    sleep 0.15
+done || true
 echo ""
-sleep 0.3
+sleep 0.5
 
-printf '\033[1;31m'
-echo "  ┌──────────────────────────────────────────────────────────┐"
-echo "  │  ENTERPRISE READY — Zero-trust, air-gap capable         │"
-echo "  │  98% failure prevention  •  AES-256  •  Fail-open       │"
-echo "  │  \$296/\$878 measured savings — auditable per engineer    │"
-echo "  └──────────────────────────────────────────────────────────┘"
+# ── 6. ROI ────────────────────────────────────────────────────────────────────
+printf '\033[1;32m'
+echo "  ┌──────────────────────────────────────────────────────────────┐"
+echo "  │  PRECC Enterprise: secure, auditable, zero-config ROI        │"
+echo "  │  34% saving  •  AES-256  •  HMAC license  •  SMTP reports    │"
+echo "  │  Fail-open guarantee  •  No network calls at runtime          │"
+echo "  └──────────────────────────────────────────────────────────────┘"
 printf '\033[0m\n'
 sleep 0.5
