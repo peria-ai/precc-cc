@@ -16,7 +16,7 @@ struct RewriteRule {
 }
 
 /// Standard prefix-swap rewrite rules.
-/// Checked in order; first match wins.
+/// Checked in order; first match wins (longest prefixes before shorter ones).
 static RULES: &[RewriteRule] = &[
     // --- Git commands ---
     RewriteRule {
@@ -32,6 +32,11 @@ static RULES: &[RewriteRule] = &[
     RewriteRule {
         from: "git log",
         to: "rtk git log",
+        est_tokens_saved: 160,
+    },
+    RewriteRule {
+        from: "git show",
+        to: "rtk git show",
         est_tokens_saved: 160,
     },
     RewriteRule {
@@ -70,24 +75,39 @@ static RULES: &[RewriteRule] = &[
         est_tokens_saved: 60,
     },
     RewriteRule {
-        from: "git show",
-        to: "rtk git show",
+        from: "git worktree",
+        to: "rtk git worktree",
         est_tokens_saved: 60,
     },
     // --- GitHub CLI ---
     RewriteRule {
         from: "gh pr",
         to: "rtk gh pr",
-        est_tokens_saved: 120,
+        est_tokens_saved: 200,
     },
     RewriteRule {
         from: "gh issue",
         to: "rtk gh issue",
-        est_tokens_saved: 120,
+        est_tokens_saved: 180,
     },
     RewriteRule {
         from: "gh run",
         to: "rtk gh run",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "gh repo",
+        to: "rtk gh repo",
+        est_tokens_saved: 120,
+    },
+    RewriteRule {
+        from: "gh api",
+        to: "rtk gh api",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "gh release",
+        to: "rtk gh release",
         est_tokens_saved: 120,
     },
     // --- Cargo ---
@@ -117,6 +137,11 @@ static RULES: &[RewriteRule] = &[
         est_tokens_saved: 200,
     },
     RewriteRule {
+        from: "cargo install",
+        to: "rtk cargo install",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
         from: "cargo fmt",
         to: "rtk cargo fmt",
         est_tokens_saved: 60,
@@ -133,6 +158,11 @@ static RULES: &[RewriteRule] = &[
         est_tokens_saved: 180,
     },
     RewriteRule {
+        from: "npm exec",
+        to: "rtk npm exec",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
         from: "npm install",
         to: "rtk npm install",
         est_tokens_saved: 150,
@@ -147,7 +177,180 @@ static RULES: &[RewriteRule] = &[
         to: "rtk yarn add",
         est_tokens_saved: 100,
     },
+    // --- npx (standalone) ---
+    RewriteRule {
+        from: "npx tsc",
+        to: "rtk tsc",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "npx eslint",
+        to: "rtk lint",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "npx biome",
+        to: "rtk lint",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "npx prettier",
+        to: "rtk prettier",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "npx next build",
+        to: "rtk next",
+        est_tokens_saved: 400,
+    },
+    RewriteRule {
+        from: "npx vitest",
+        to: "rtk vitest run",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "npx playwright",
+        to: "rtk playwright",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "npx prisma",
+        to: "rtk prisma",
+        est_tokens_saved: 180,
+    },
+    // --- pnpm ---
+    RewriteRule {
+        from: "pnpm tsc",
+        to: "rtk tsc",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm lint",
+        to: "rtk lint",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm prettier",
+        to: "rtk prettier",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm next build",
+        to: "rtk next",
+        est_tokens_saved: 400,
+    },
+    RewriteRule {
+        from: "pnpm vitest",
+        to: "rtk vitest run",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm playwright",
+        to: "rtk playwright",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm prisma",
+        to: "rtk prisma",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm test",
+        to: "rtk vitest run",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "pnpm list",
+        to: "rtk pnpm list",
+        est_tokens_saved: 100,
+    },
+    RewriteRule {
+        from: "pnpm ls",
+        to: "rtk pnpm ls",
+        est_tokens_saved: 100,
+    },
+    RewriteRule {
+        from: "pnpm outdated",
+        to: "rtk pnpm outdated",
+        est_tokens_saved: 100,
+    },
+    RewriteRule {
+        from: "pnpm install",
+        to: "rtk pnpm install",
+        est_tokens_saved: 100,
+    },
+    // --- Standalone JS/TS tooling ---
+    RewriteRule {
+        from: "tsc",
+        to: "rtk tsc",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "eslint",
+        to: "rtk lint",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "biome",
+        to: "rtk lint",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "prettier",
+        to: "rtk prettier",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "next build",
+        to: "rtk next",
+        est_tokens_saved: 400,
+    },
+    RewriteRule {
+        from: "vitest",
+        to: "rtk vitest run",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "jest",
+        to: "rtk vitest run",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "playwright",
+        to: "rtk playwright",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "prisma",
+        to: "rtk prisma",
+        est_tokens_saved: 180,
+    },
     // --- Python ---
+    RewriteRule {
+        from: "python3 -m mypy",
+        to: "rtk mypy",
+        est_tokens_saved: 200,
+    },
+    RewriteRule {
+        from: "python -m mypy",
+        to: "rtk mypy",
+        est_tokens_saved: 200,
+    },
+    RewriteRule {
+        from: "mypy",
+        to: "rtk mypy",
+        est_tokens_saved: 200,
+    },
+    RewriteRule {
+        from: "ruff check",
+        to: "rtk ruff check",
+        est_tokens_saved: 180,
+    },
+    RewriteRule {
+        from: "ruff format",
+        to: "rtk ruff format",
+        est_tokens_saved: 150,
+    },
     RewriteRule {
         from: "python -m pytest",
         to: "rtk pytest",
@@ -159,8 +362,43 @@ static RULES: &[RewriteRule] = &[
         est_tokens_saved: 380,
     },
     RewriteRule {
+        from: "uv pip list",
+        to: "rtk pip list",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "uv pip outdated",
+        to: "rtk pip outdated",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "uv pip install",
+        to: "rtk pip install",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "pip3 list",
+        to: "rtk pip list",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "pip3 outdated",
+        to: "rtk pip outdated",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "pip3 install",
+        to: "rtk pip install",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
         from: "pip install",
         to: "rtk pip install",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "pip list",
+        to: "rtk pip list",
         est_tokens_saved: 150,
     },
     // --- Go ---
@@ -174,6 +412,16 @@ static RULES: &[RewriteRule] = &[
         to: "rtk go build",
         est_tokens_saved: 300,
     },
+    RewriteRule {
+        from: "go vet",
+        to: "rtk go vet",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "golangci-lint",
+        to: "rtk golangci-lint",
+        est_tokens_saved: 300,
+    },
     // --- File operations ---
     RewriteRule {
         from: "cat",
@@ -181,9 +429,34 @@ static RULES: &[RewriteRule] = &[
         est_tokens_saved: 50,
     },
     RewriteRule {
+        from: "head",
+        to: "rtk read",
+        est_tokens_saved: 50,
+    },
+    RewriteRule {
+        from: "tail",
+        to: "rtk read",
+        est_tokens_saved: 50,
+    },
+    RewriteRule {
         from: "ls",
         to: "rtk ls",
         est_tokens_saved: 40,
+    },
+    RewriteRule {
+        from: "find",
+        to: "rtk find",
+        est_tokens_saved: 80,
+    },
+    RewriteRule {
+        from: "tree",
+        to: "rtk tree",
+        est_tokens_saved: 80,
+    },
+    RewriteRule {
+        from: "diff",
+        to: "rtk diff",
+        est_tokens_saved: 100,
     },
     // --- rg/grep ---
     RewriteRule {
@@ -196,88 +469,22 @@ static RULES: &[RewriteRule] = &[
         to: "rtk grep",
         est_tokens_saved: 90,
     },
-    // --- JS/TS tooling ---
-    RewriteRule {
-        from: "pnpm test",
-        to: "rtk vitest run",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "pnpm vitest",
-        to: "rtk vitest run",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "vitest",
-        to: "rtk vitest run",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "pnpm tsc",
-        to: "rtk tsc",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "npx tsc",
-        to: "rtk tsc",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "tsc",
-        to: "rtk tsc",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "pnpm lint",
-        to: "rtk lint",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "npx eslint",
-        to: "rtk lint",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "eslint",
-        to: "rtk lint",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "npx prettier",
-        to: "rtk prettier",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "prettier",
-        to: "rtk prettier",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "pnpm playwright",
-        to: "rtk playwright",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "npx playwright",
-        to: "rtk playwright",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "playwright",
-        to: "rtk playwright",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "npx prisma",
-        to: "rtk prisma",
-        est_tokens_saved: 180,
-    },
-    RewriteRule {
-        from: "prisma",
-        to: "rtk prisma",
-        est_tokens_saved: 180,
-    },
     // --- Containers ---
+    RewriteRule {
+        from: "docker compose ps",
+        to: "rtk docker compose ps",
+        est_tokens_saved: 150,
+    },
+    RewriteRule {
+        from: "docker compose logs",
+        to: "rtk docker compose logs",
+        est_tokens_saved: 200,
+    },
+    RewriteRule {
+        from: "docker compose build",
+        to: "rtk docker compose build",
+        est_tokens_saved: 400,
+    },
     RewriteRule {
         from: "docker build",
         to: "rtk docker build",
@@ -287,6 +494,11 @@ static RULES: &[RewriteRule] = &[
         from: "docker run",
         to: "rtk docker run",
         est_tokens_saved: 200,
+    },
+    RewriteRule {
+        from: "docker exec",
+        to: "rtk docker exec",
+        est_tokens_saved: 150,
     },
     RewriteRule {
         from: "docker ps",
@@ -329,21 +541,22 @@ static RULES: &[RewriteRule] = &[
         to: "rtk curl",
         est_tokens_saved: 200,
     },
-    // --- pnpm package management ---
     RewriteRule {
-        from: "pnpm list",
-        to: "rtk pnpm list",
+        from: "wget",
+        to: "rtk wget",
         est_tokens_saved: 100,
     },
+    // --- AWS ---
     RewriteRule {
-        from: "pnpm ls",
-        to: "rtk pnpm ls",
-        est_tokens_saved: 100,
+        from: "aws",
+        to: "rtk aws",
+        est_tokens_saved: 200,
     },
+    // --- PostgreSQL ---
     RewriteRule {
-        from: "pnpm outdated",
-        to: "rtk pnpm outdated",
-        est_tokens_saved: 100,
+        from: "psql",
+        to: "rtk psql",
+        est_tokens_saved: 180,
     },
     // --- make ---
     RewriteRule {
@@ -623,9 +836,24 @@ mod tests {
         assert_eq!(tokens_saved("pytest tests/"), 380);
         assert_eq!(tokens_saved("go test ./..."), 380);
         assert_eq!(tokens_saved("go build ./..."), 300);
+        assert_eq!(tokens_saved("go vet ./..."), 150);
+        assert_eq!(tokens_saved("golangci-lint run"), 300);
         assert_eq!(tokens_saved("make all"), 400);
         assert_eq!(tokens_saved("docker build ."), 500);
+        assert_eq!(tokens_saved("docker exec -it foo bash"), 150);
         assert_eq!(tokens_saved("kubectl describe pod"), 300);
+        assert_eq!(tokens_saved("ruff check src/"), 180);
+        assert_eq!(tokens_saved("mypy src/"), 200);
+        assert_eq!(tokens_saved("wget https://example.com"), 100);
+        assert_eq!(tokens_saved("aws s3 ls"), 200);
+        assert_eq!(tokens_saved("psql -c 'SELECT 1'"), 180);
+        assert_eq!(tokens_saved("diff a.txt b.txt"), 100);
+        assert_eq!(tokens_saved("find . -name '*.rs'"), 80);
+        assert_eq!(tokens_saved("tree src/"), 80);
+        assert_eq!(tokens_saved("biome check ."), 180);
+        assert_eq!(tokens_saved("gh repo view"), 120);
+        assert_eq!(tokens_saved("gh api /repos"), 150);
+        assert_eq!(tokens_saved("git worktree list"), 60);
     }
 
     #[test]
