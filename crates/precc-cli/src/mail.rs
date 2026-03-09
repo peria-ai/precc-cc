@@ -4,12 +4,17 @@
 //! Config file: `~/.config/precc/mail.toml`
 //! ```toml
 //! [smtp]
-//! host = "smtp.gmail.com"
+//! host = "smtp.huawei.com"
 //! port = 587
-//! username = "you@gmail.com"
+//! username = "y00577373"
 //! password = "app-password"
-//! from = "you@gmail.com"       # defaults to username if omitted
+//! from = "yijun.yu@huawei.com"  # defaults to username if omitted
+//! ssh_relay = "manny"           # optional: run send via ssh <host> python3
 //! ```
+//!
+//! When `ssh_relay` is set, the send is executed on the remote host via SSH
+//! using Python3's smtplib — useful when the local machine cannot reach the
+//! SMTP server directly (e.g. corporate SMTP only reachable from inside network).
 
 use anyhow::{bail, Context, Result};
 use lettre::message::header::ContentType;
@@ -32,6 +37,9 @@ struct SmtpConfig {
     username: String,
     password: String,
     from: Option<String>,
+    /// Optional SSH host to relay the send through (e.g. "manny").
+    /// When set, files are copied via scp and send executed via ssh python3.
+    ssh_relay: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -39,8 +47,16 @@ fn default_port() -> u16 {
 }
 
 /// Send an email with optional file attachments.
+///
+/// If `smtp.ssh_relay` is set in the config, the send is delegated to that
+/// SSH host using Python3 smtplib (files are copied via scp first).
 pub fn send_mail(to: &str, subject: &str, body: &str, attachments: &[PathBuf]) -> Result<()> {
     let cfg = load_config()?;
+
+    // Delegate to SSH relay if configured
+    if let Some(relay) = &cfg.smtp.ssh_relay {
+        return send_via_ssh_relay(relay, &cfg.smtp, to, subject, body, attachments);
+    }
     let from = cfg
         .smtp
         .from
@@ -75,11 +91,20 @@ pub fn send_mail(to: &str, subject: &str, body: &str, attachments: &[PathBuf]) -
 
     let creds = Credentials::new(cfg.smtp.username.clone(), cfg.smtp.password.clone());
 
-    let mailer = SmtpTransport::starttls_relay(&cfg.smtp.host)
-        .context("connecting to SMTP")?
-        .port(cfg.smtp.port)
-        .credentials(creds)
-        .build();
+    // Port 465 uses implicit TLS (relay); all other ports use STARTTLS.
+    let mailer = if cfg.smtp.port == 465 {
+        SmtpTransport::relay(&cfg.smtp.host)
+            .context("connecting to SMTP")?
+            .port(cfg.smtp.port)
+            .credentials(creds)
+            .build()
+    } else {
+        SmtpTransport::starttls_relay(&cfg.smtp.host)
+            .context("connecting to SMTP")?
+            .port(cfg.smtp.port)
+            .credentials(creds)
+            .build()
+    };
 
     mailer.send(&email).context("sending email")?;
     Ok(())
@@ -118,6 +143,145 @@ pub fn cmd_mail_report(to: &str, attachments: &[PathBuf]) -> Result<()> {
 
     send_mail(to, subject, body, attachments)?;
     println!("Report sent to {to}");
+    Ok(())
+}
+
+/// Send via SSH relay: scp attachments to remote /tmp, then run Python3 smtplib.
+fn send_via_ssh_relay(
+    relay: &str,
+    smtp: &SmtpConfig,
+    to: &str,
+    subject: &str,
+    body: &str,
+    attachments: &[PathBuf],
+) -> Result<()> {
+    use std::process::Command;
+
+    let remote_dir = "/tmp/precc-mail-relay";
+
+    // Ensure remote tmp dir exists
+    Command::new("ssh")
+        .args([relay, &format!("mkdir -p {remote_dir}")])
+        .status()
+        .context("ssh mkdir")?;
+
+    // scp attachments
+    if !attachments.is_empty() {
+        let mut scp = Command::new("scp");
+        for path in attachments {
+            scp.arg(path);
+        }
+        scp.arg(format!("{relay}:{remote_dir}/"));
+        scp.status().context("scp attachments to relay")?;
+    }
+
+    // Build Python script
+    let filenames: Vec<String> = attachments
+        .iter()
+        .map(|p| {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            format!("{remote_dir}/{name}")
+        })
+        .collect();
+
+    let attachments_list = filenames
+        .iter()
+        .map(|f| format!("    '{f}'"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+
+    let tls_mode = if smtp.port == 465 {
+        "ssl_ctx = ssl.create_default_context()\nwith smtplib.SMTP_SSL(HOST, PORT, context=ssl_ctx, timeout=15) as s:\n    s.login(USERNAME, PASSWORD)\n    s.send_message(msg)\n    print('Sent.')"
+    } else {
+        "ssl_ctx = ssl.create_default_context()\nwith smtplib.SMTP(HOST, PORT, timeout=15) as s:\n    s.ehlo(); s.starttls(context=ssl_ctx); s.ehlo()\n    s.login(USERNAME, PASSWORD)\n    s.send_message(msg)\n    print('Sent.')"
+    };
+
+    let from = smtp.from.as_deref().unwrap_or(&smtp.username);
+    // Escape single quotes in user-controlled strings
+    let body_escaped = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let subject_escaped = subject.replace('\\', "\\\\").replace('\'', "\\'");
+
+    let python = format!(
+        r#"import smtplib, ssl, os, mimetypes
+from email.message import EmailMessage
+
+HOST     = '{host}'
+PORT     = {port}
+USERNAME = '{user}'
+PASSWORD = '{pass}'
+FROM     = '{from}'
+TO       = '{to}'
+
+ATTACHMENTS = [
+{att}
+]
+
+msg = EmailMessage()
+msg['Subject'] = '{subj}'
+msg['From']    = FROM
+msg['To']      = TO
+msg.set_content('{body}')
+
+for path in ATTACHMENTS:
+    if not os.path.exists(path):
+        continue
+    with open(path, 'rb') as f:
+        data = f.read()
+    filename = os.path.basename(path)
+    mt, _ = mimetypes.guess_type(filename)
+    maintype, subtype = (mt or 'application/octet-stream').split('/', 1)
+    msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+
+{tls}
+"#,
+        host = smtp.host,
+        port = smtp.port,
+        user = smtp.username,
+        pass = smtp.password,
+        from = from,
+        to = to,
+        att = attachments_list,
+        subj = subject_escaped,
+        body = body_escaped,
+        tls = tls_mode,
+    );
+
+    // Write the Python script to a temp file on the relay via stdin, then execute it.
+    // (Passing via `python3 -c` fails because the shell interprets the multiline script.)
+    let script_path = format!("{remote_dir}/_send.py");
+    {
+        use std::io::Write;
+        let mut upload = Command::new("ssh")
+            .args([relay, &format!("cat > {script_path}")])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .context("ssh spawn to write script")?;
+        upload
+            .stdin
+            .take()
+            .context("no stdin on ssh")?
+            .write_all(python.as_bytes())
+            .context("write python script to relay")?;
+        let status = upload.wait().context("waiting for script upload")?;
+        if !status.success() {
+            bail!("failed to upload script to relay");
+        }
+    }
+
+    let status = Command::new("ssh")
+        .args([relay, &format!("python3 {script_path}")])
+        .status()
+        .context("ssh python3 send")?;
+
+    if !status.success() {
+        bail!(
+            "SSH relay send failed (exit {})",
+            status.code().unwrap_or(-1)
+        );
+    }
     Ok(())
 }
 
