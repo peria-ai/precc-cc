@@ -40,6 +40,13 @@ done
 echo "==> Deploying PRECC ${VERSION} to ${PUBLIC_REPO}"
 
 # ---------------------------------------------------------------------------
+# Step 0: Bump Cargo.toml workspace version to match the release tag
+# ---------------------------------------------------------------------------
+BARE_VERSION="${VERSION#v}"   # strip leading 'v'
+sed -i "s/^version = \".*\"/version = \"${BARE_VERSION}\"/" Cargo.toml
+echo "==> Bumped Cargo.toml version to ${BARE_VERSION}"
+
+# ---------------------------------------------------------------------------
 # Step 1: Sync public files via deploy-demo
 # ---------------------------------------------------------------------------
 echo "==> Step 1: Syncing public repo..."
