@@ -1,7 +1,7 @@
 ---
 name: precc-token-saver
 description: Before running any shell command, pipe it through the PRECC hook to fix wrong-directory errors, compress CLI output, and apply learned heuristics — saving 34%+ of API token spend automatically.
-version: 0.1.3
+version: 0.1.5
 emoji: ⚡
 user-invocable: true
 disable-model-invocation: false
