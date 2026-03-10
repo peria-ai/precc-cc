@@ -1,0 +1,23 @@
+[workspace]
+
+[package]
+name = "zeroclaw-precc"
+version = "0.1.3"
+edition = "2021"
+description = "PRECC token-saving plugin for ZeroClaw — wraps shell commands through precc-hook"
+license = "MIT"
+repository = "https://github.com/yijunyu/precc-cc"
+keywords = ["zeroclaw", "precc", "token-saving", "ai-agent"]
+
+[lib]
+name = "zeroclaw_precc"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tokio = { version = "1", features = ["process", "io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

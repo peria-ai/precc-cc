@@ -1,0 +1,52 @@
+{
+  "id": "precc-token-saver",
+  "name": "PRECC Token Saver",
+  "version": "0.1.3",
+  "description": "Predictive Error Correction for agentic AI — fixes bash commands before they fail, compresses CLI output, and saves 34%+ of API token spend.",
+  "kind": "tool",
+  "skills": [
+    "./skills/precc-token-saver"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "preccBin": {
+        "type": "string",
+        "description": "Absolute path to the precc binary. Defaults to 'precc' on PATH.",
+        "default": "precc"
+      },
+      "preccHookBin": {
+        "type": "string",
+        "description": "Absolute path to precc-hook binary. Defaults to 'precc-hook' on PATH.",
+        "default": "precc-hook"
+      },
+      "autoInit": {
+        "type": "boolean",
+        "description": "Automatically run 'precc init' on first use if databases are absent.",
+        "default": true
+      },
+      "reportOnSummary": {
+        "type": "boolean",
+        "description": "Append a token-savings summary line after each agent session.",
+        "default": true
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "preccBin": {
+      "label": "precc binary path",
+      "placeholder": "precc"
+    },
+    "preccHookBin": {
+      "label": "precc-hook binary path",
+      "placeholder": "precc-hook"
+    },
+    "autoInit": {
+      "label": "Auto-initialise on first use"
+    },
+    "reportOnSummary": {
+      "label": "Append savings summary after session"
+    }
+  }
+}
