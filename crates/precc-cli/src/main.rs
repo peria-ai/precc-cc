@@ -1355,12 +1355,76 @@ fn cmd_mail(action: MailAction) -> Result<()> {
 // =============================================================================
 
 /// Self-update PRECC binaries to the latest (or specified) GitHub release.
+/// Fire an anonymous update-check ping in the background.
+///
+/// Sends a single GET request to the configured ping URL with these
+/// query parameters (no PII, no cookies):
+///   - `v`  — current version (e.g. "0.1.4")
+///   - `os` — operating system slug ("linux" / "macos" / "windows")
+///   - `arch` — CPU architecture ("x86_64" / "aarch64")
+///
+/// The request is fire-and-forget: spawned as a background process so it
+/// never delays the update flow. Any error is silently ignored.
+///
+/// Opt-out: set `PRECC_NO_TELEMETRY=1` in the environment.
+/// Ping URL: compile-time `PRECC_PING_URL` env var, falling back to
+/// the GoatCounter endpoint `https://precc.goatcounter.com/count`.
+fn fire_update_ping(current_version: &str) {
+    if std::env::var("PRECC_NO_TELEMETRY").is_ok() {
+        return;
+    }
+
+    const PING_URL: &str = match option_env!("PRECC_PING_URL") {
+        Some(u) => u,
+        None => "https://precc.goatcounter.com/count",
+    };
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    // GoatCounter /count accepts: p (path), t (title), q (query string carries extra data)
+    // We encode version+os+arch in the path so each variant is a separate counter.
+    let path = format!("/update/{}/{}/{}", current_version, os, arch);
+    let url = format!("{}?p={}&t=update-ping", PING_URL, urlencoding_simple(&path));
+
+    // Spawn detached curl — no wait, no stdout/stderr capture.
+    let _ = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "5",
+            "--silent",
+            "--output",
+            "/dev/null",
+            &url,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn(); // spawn() not wait() — fire and forget
+}
+
+/// Minimal percent-encoding for path segments (encodes space and non-ASCII only).
+fn urlencoding_simple(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '/' => {
+                vec![c]
+            }
+            c => format!("%{:02X}", c as u32).chars().collect(),
+        })
+        .collect()
+}
+
 fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
     use std::io::Write;
     use std::process::Command;
 
     const REPO: &str = "yijunyu/precc-cc";
     const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+    // ── 0. Fire anonymous update-check ping (non-blocking) ───────────────────
+    fire_update_ping(CURRENT);
 
     // ── 1. Detect platform triple ────────────────────────────────────────────
     let target_triple = update_target_triple().ok_or_else(|| {
@@ -1723,5 +1787,30 @@ mod update_tests {
         for p in parts {
             assert!(p.parse::<u32>().is_ok(), "non-numeric part {p:?} in {v:?}");
         }
+    }
+
+    // ── urlencoding_simple ───────────────────────────────────────────────────
+
+    #[test]
+    fn urlencoding_passthrough_safe_chars() {
+        assert_eq!(
+            urlencoding_simple("/update/0.1.4/linux/x86_64"),
+            "/update/0.1.4/linux/x86_64"
+        );
+    }
+
+    #[test]
+    fn urlencoding_encodes_space() {
+        assert_eq!(urlencoding_simple("hello world"), "hello%20world");
+    }
+
+    // ── fire_update_ping ────────────────────────────────────────────────────
+
+    #[test]
+    fn ping_suppressed_by_env() {
+        std::env::set_var("PRECC_NO_TELEMETRY", "1");
+        // Should return immediately without spawning anything (no panic)
+        fire_update_ping("0.1.4");
+        std::env::remove_var("PRECC_NO_TELEMETRY");
     }
 }
