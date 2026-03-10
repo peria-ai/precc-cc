@@ -1,7 +1,7 @@
 ---
 name: precc-token-saver
 description: Before running any shell command, pipe it through the PRECC hook to fix wrong-directory errors, compress CLI output, and apply learned heuristics — saving 34%+ of API token spend automatically.
-version: 0.1.7
+version: 0.1.8
 emoji: ⚡
 user-invocable: true
 disable-model-invocation: false
@@ -40,17 +40,28 @@ In under 3ms it:
 
 ## How it works in OpenClaw
 
-When PRECC Token Saver is active, every `shell` tool call is first piped through
-`precc-hook`. The hook reads the command as JSON on stdin and writes a (possibly
-rewritten) command back to stdout. OpenClaw then executes the rewritten command.
+> **Note:** OpenClaw does not yet have a native `PreToolUse` hook (unlike Claude
+> Code). This skill works via **prompt-level instruction**: the SKILL.md is loaded
+> into the agent's context and the agent is instructed to manually pipe every shell
+> command through `precc-hook` before executing it. Interception is LLM-enforced,
+> not OS-level. A native hook equivalent is tracked in
+> [openclaw/openclaw#7597](https://github.com/openclaw/openclaw/issues/7597).
+
+When PRECC Token Saver is active, the agent follows this pattern for every shell
+command it wants to run:
+
+1. Construct the JSON payload for `precc-hook`
+2. Pipe it through `precc-hook` on stdin
+3. Read the (possibly rewritten) command from stdout
+4. Execute the rewritten command instead of the original
 
 ```
-OpenClaw agent wants to run: cargo build
+Agent wants to run: cargo build
      ↓
 precc-hook receives:  {"tool_input": {"command": "cargo build"}}
 precc-hook outputs:   {"hookSpecificOutput": {"updatedInput": {"command": "cd /path/to/project && rtk cargo build"}}}
      ↓
-OpenClaw executes:    cd /path/to/project && rtk cargo build
+Agent executes:       cd /path/to/project && rtk cargo build
 ```
 
 ## Setup
@@ -77,7 +88,10 @@ Once the skill is loaded, you can address the agent directly:
 
 ## Skill behaviour
 
-This skill instructs the agent to:
+This skill is loaded as a system-level instruction into the agent's context.
+The agent (not the platform) is responsible for enforcing the hook pattern.
+
+The agent is instructed to:
 
 1. **Always** route shell/bash tool calls through `precc-hook` by constructing the
    hook JSON payload and parsing the response before execution.
