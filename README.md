@@ -24,7 +24,36 @@ Then run:
 precc init
 ```
 
-### Option 2: Claude Code Plugin
+### Option 2: OpenClaw (ClawHub)
+
+If you use [OpenClaw](https://github.com/openclaw/openclaw), install directly from [ClawHub](https://clawhub.ai/skills/precc-token-saver):
+
+```bash
+clawdhub install precc-token-saver
+```
+
+The skill activates automatically. Every shell command OpenClaw runs is piped through `precc-hook` before execution.
+
+To show savings at any time:
+
+```
+@precc report
+@precc skills list
+@precc savings
+@precc update
+```
+
+### Option 3: ZeroClaw
+
+If you use [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw), install from the GitHub repo:
+
+```bash
+zeroclaw skills install https://github.com/yijunyu/precc-cc
+```
+
+The skill adds four tools to the agent (`precc_hook`, `precc_report`, `precc_skills`, `precc_update`) and injects the hook routing instructions into the system prompt automatically.
+
+### Option 4: Claude Code Plugin
 
 ```bash
 claude plugin marketplace add yijunyu/precc
@@ -95,7 +124,53 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 | **Cache reads saved** | **988M / 1.67B tokens (59%)** |
 | **Hook latency** | **2.93ms avg (1.77ms overhead)** |
 
+## Pricing
+
+| Feature | Free | Pro |
+|---|---|---|
+| Wrong-dir correction | ✓ | ✓ |
+| RTK output compression | ✓ | ✓ |
+| jj/Jujutsu translation | ✓ | ✓ |
+| Built-in skills (8 included) | ✓ | ✓ |
+| `precc report` | ✓ | ✓ |
+| Session mining (`precc ingest`) | 1 session | Unlimited |
+| Mined skills active in hook | 3 max | Unlimited |
+| `precc gif` (script → animated GIF) | — | ✓ |
+| `precc mail` (email reports) | — | ✓ |
+| `precc savings` (dollar estimate) | — | ✓ |
+
+Activate a Pro key:
+
+```bash
+precc license activate PRECC-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX
+precc license status
+```
+
+**Telemetry:** `precc update` sends one anonymous ping (version + OS + arch, no PII) to count active users. Opt out with `PRECC_NO_TELEMETRY=1`.
+
 ## Changelog
+
+### v0.1.5 — Update Ping & Telemetry
+
+- Anonymous update-check ping on `precc update` (version/OS/arch only, no PII)
+- Opt-out: `PRECC_NO_TELEMETRY=1`
+- Ping URL configurable at build time via `PRECC_PING_URL`
+
+### v0.1.4 — License Enforcement & Plugin Marketplace
+
+- **Free/Pro tier gates** — `precc ingest` (1 session free), mined skills capped at 3 on Free, `precc gif` / `precc mail` / `precc savings` require Pro
+- **`license::tier()`** — `OnceLock`-cached tier check, zero cost on repeated calls in hook
+- **OpenClaw plugin** published to [ClawHub](https://clawhub.ai/skills/precc-token-saver) (`clawdhub install precc-token-saver`)
+- **ZeroClaw plugin** — `SKILL.toml` with native shell tools, installable via `zeroclaw skills install`
+- `PRECC_LICENSE_SECRET` passed through Linux and macOS release builds
+
+### v0.1.3 — Self-Update & GIF Generation
+
+- **`precc update`** — self-update from GitHub releases; detects platform, downloads correct asset, replaces binaries in-place, verifies new version
+- **`precc gif <script> <length>`** — record a bash script with `asciinema` and convert to GIF at a target duration via `agg`
+- **`precc mail`** — send reports and attachments via SSH relay SMTP
+- **`precc license`** — HMAC-SHA256 machine-bound license key system (activate/status/deactivate)
+- Deploy script auto-bumps `Cargo.toml` version to match release tag
 
 ### v0.6.0 — Hook Latency Optimization
 
