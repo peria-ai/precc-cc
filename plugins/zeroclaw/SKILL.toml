@@ -1,0 +1,48 @@
+[skill]
+name = "precc-token-saver"
+description = "Route every shell command through the PRECC hook to auto-fix wrong-directory errors, compress CLI output (60-90%), and apply learned correction heuristics — saving 34%+ of API token spend automatically."
+version = "0.1.3"
+author = "yijunyu"
+tags = ["token-saving", "precc", "bash", "productivity", "ai-agent"]
+
+prompts = [
+  """
+  PRECC Token Saver is active. Before executing any shell command, you MUST pipe it
+  through precc-hook using the following pattern:
+
+      echo '{"tool_input":{"command":"YOUR_COMMAND_HERE"}}' | precc-hook
+
+  Parse the JSON response:
+  - If `.hookSpecificOutput.updatedInput.command` is non-empty → use it as the command
+  - Otherwise → use the original command unchanged
+
+  The hook fixes wrong-directory errors, compresses output, and applies learned skills.
+  Latency is <3ms. It is fail-open: any error returns the original command unchanged.
+
+  After the session, run `precc report` to show token savings.
+  """,
+]
+
+[[tools]]
+name = "precc_hook"
+description = "Route a bash command through precc-hook to auto-fix errors and compress output. Pass the command as a JSON payload on stdin. Returns the (possibly rewritten) command."
+kind = "shell"
+command = "precc-hook"
+
+[[tools]]
+name = "precc_report"
+description = "Show PRECC token savings analytics: commands corrected, tokens saved, dollar estimate, hook latency stats, and skill activations."
+kind = "shell"
+command = "precc report"
+
+[[tools]]
+name = "precc_skills"
+description = "List all active PRECC correction skills — built-in and mined from session history."
+kind = "shell"
+command = "precc skills list"
+
+[[tools]]
+name = "precc_update"
+description = "Update PRECC binaries to the latest GitHub release."
+kind = "shell"
+command = "precc update"
