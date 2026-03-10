@@ -1,10 +1,26 @@
 ---
 name: precc-token-saver
 description: Before running any shell command, pipe it through the PRECC hook to fix wrong-directory errors, compress CLI output, and apply learned heuristics — saving 34%+ of API token spend automatically.
+version: 0.1.3
 emoji: ⚡
 user-invocable: true
 disable-model-invocation: false
-metadata: {"openclaw": {"emoji": "⚡", "homepage": "https://github.com/yijunyu/precc-cc", "os": ["darwin", "linux"], "requires": {"bins": ["precc-hook", "precc"]}, "install": [{"brew": "yijunyu/tap/precc", "curl": "curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"}]}}
+metadata:
+  openclaw:
+    emoji: ⚡
+    homepage: https://github.com/yijunyu/precc-cc
+    os:
+      - darwin
+      - linux
+    requires:
+      bins:
+        - precc-hook
+        - precc
+    install:
+      - kind: brew
+        tap: yijunyu/tap
+        formula: precc
+        bins: [precc, precc-hook]
 ---
 
 # PRECC Token Saver
