@@ -9,3 +9,7 @@ pub mod mining;
 pub mod promote;
 pub mod rtk;
 pub mod skills;
+
+/// Free-tier cap: maximum number of mined (non-builtin) skills that will be
+/// applied per hook invocation. Builtin skills are always applied regardless.
+pub const FREE_SKILL_LIMIT: usize = 3;

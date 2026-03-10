@@ -18,6 +18,7 @@ use anyhow::{bail, Result};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -73,6 +74,67 @@ impl License {
             "Community"
         }
     }
+}
+
+/// Subscription tier — determined once per process from the stored license key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tier {
+    Free,
+    Pro,
+    Team,
+    Enterprise,
+}
+
+impl Tier {
+    pub fn is_paid(self) -> bool {
+        self != Tier::Free
+    }
+
+    /// Human-readable name for error messages.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tier::Free => "Free",
+            Tier::Pro => "Pro",
+            Tier::Team => "Team",
+            Tier::Enterprise => "Enterprise",
+        }
+    }
+}
+
+/// Return the active tier for this process.
+///
+/// Reads `~/.local/share/precc/license.key` exactly once and caches the
+/// result in a `OnceLock` so the hook can call this on every command
+/// with zero re-parsing cost after the first call.
+///
+/// Silently falls back to `Tier::Free` on any error (missing file,
+/// invalid key, expired key, wrong machine) — the hook must never block.
+pub fn tier() -> Tier {
+    static TIER: OnceLock<Tier> = OnceLock::new();
+    *TIER.get_or_init(|| match load() {
+        Ok(Some(lic)) if !lic.is_expired() => {
+            if lic.is_enterprise() {
+                Tier::Enterprise
+            } else if lic.is_team() {
+                Tier::Team
+            } else if lic.is_pro() {
+                Tier::Pro
+            } else {
+                Tier::Free
+            }
+        }
+        _ => Tier::Free,
+    })
+}
+
+/// Emit a consistent upgrade prompt to stderr and return an error.
+/// Used by gated commands so every gate looks the same.
+pub fn require_paid(feature: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{feature} requires a PRECC Pro (or higher) license.\n\
+         Activate:  precc license activate <key>\n\
+         Get a key: https://github.com/yijunyu/precc-cc#pricing"
+    )
 }
 
 /// Parse and validate a license key string.

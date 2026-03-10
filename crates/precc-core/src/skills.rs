@@ -16,6 +16,8 @@ pub struct SkillMatch {
     pub template: String,
     pub confidence: f64,
     pub skill_id: i64,
+    /// "builtin" or "mined" — used for tier-based gating.
+    pub source: String,
 }
 
 /// Query heuristics.db for skills matching the given command.
@@ -29,7 +31,7 @@ pub fn find_matches(
 ) -> Result<Vec<SkillMatch>> {
     // Get all enabled skills with command_regex triggers
     let mut stmt = conn.prepare_cached(
-        "SELECT s.id, s.name, t.pattern, t.weight, a.action_type, a.template, a.confidence
+        "SELECT s.id, s.name, s.source, t.pattern, t.weight, a.action_type, a.template, a.confidence
          FROM skills s
          JOIN skill_triggers t ON t.skill_id = s.id
          JOIN skill_actions a ON a.skill_id = s.id
@@ -43,11 +45,12 @@ pub fn find_matches(
         Ok(CandidateRow {
             skill_id: row.get(0)?,
             skill_name: row.get(1)?,
-            pattern: row.get(2)?,
-            weight: row.get(3)?,
-            action_type: row.get(4)?,
-            template: row.get(5)?,
-            confidence: row.get(6)?,
+            source: row.get(2)?,
+            pattern: row.get(3)?,
+            weight: row.get(4)?,
+            action_type: row.get(5)?,
+            template: row.get(6)?,
+            confidence: row.get(7)?,
         })
     })?;
 
@@ -62,6 +65,7 @@ pub fn find_matches(
                 if file_check_ok {
                     matches.push(SkillMatch {
                         skill_name: row.skill_name,
+                        source: row.source,
                         action_type: row.action_type,
                         template: row.template,
                         confidence: row.confidence * row.weight,
@@ -80,6 +84,7 @@ pub fn find_matches(
 struct CandidateRow {
     skill_id: i64,
     skill_name: String,
+    source: String,
     pattern: String,
     weight: f64,
     action_type: String,

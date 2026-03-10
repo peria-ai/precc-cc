@@ -57,6 +57,11 @@ cd "$REPO_DIR"
 # Step 2: Build Linux binaries (zigbuild, glibc 2.17 compatible)
 # ---------------------------------------------------------------------------
 echo "==> Step 2a: Building Linux binaries..."
+# PRECC_LICENSE_SECRET is baked into the binary at compile time via option_env!().
+# Set it via the environment before calling this script, e.g.:
+#   PRECC_LICENSE_SECRET=<secret> bash scripts/deploy.sh v0.2.0
+# If not set, builds fall back to the public default (community/open builds only).
+PRECC_LICENSE_SECRET="${PRECC_LICENSE_SECRET:-}" \
 cargo zigbuild --release \
     -p precc-hook \
     -p precc-cli \
@@ -85,6 +90,7 @@ build_macos() {
         -v '$(pwd):/workspace' \
         -w /workspace \
         -e PATH=${CARGO_BIN}:${OSXCROSS_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        -e PRECC_LICENSE_SECRET="${PRECC_LICENSE_SECRET:-}" \
         -e CC_${TRIPLE//-/_}=${DARWIN_TRIPLE}-clang \
         -e CXX_${TRIPLE//-/_}=${DARWIN_TRIPLE}-clang++ \
         -e AR_${TRIPLE//-/_}=${DARWIN_TRIPLE}-ar \

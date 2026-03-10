@@ -170,7 +170,12 @@ fn main() -> Result<()> {
             script,
             length,
             inputs,
-        }) => gif::cmd_gif(script, length, inputs),
+        }) => {
+            if license::tier() == license::Tier::Free {
+                return Err(license::require_paid("GIF generation"));
+            }
+            gif::cmd_gif(script, length, inputs)
+        }
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
         Some(Commands::Update { force, version }) => cmd_update(force, version),
@@ -322,9 +327,30 @@ fn cmd_init() -> Result<()> {
 // precc ingest
 // =============================================================================
 
+/// Free-tier session ingest limit.
+const FREE_INGEST_LIMIT: usize = 1;
+
 fn cmd_ingest(file: Option<String>, all: bool, force: bool) -> Result<()> {
     let data_dir = db::data_dir()?;
     let conn = db::open_history(&data_dir)?;
+
+    // License gate: Free tier is limited to FREE_INGEST_LIMIT sessions.
+    // Listing (no file, no --all) is always allowed; only actual mining is gated.
+    if license::tier() == license::Tier::Free && (file.is_some() || all) {
+        let mined_count: usize = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .unwrap_or(0);
+        if mined_count >= FREE_INGEST_LIMIT {
+            eprintln!(
+                "Free tier: session mining is limited to {} session(s). \
+                 You have already mined {}.\n{}",
+                FREE_INGEST_LIMIT,
+                mined_count,
+                license::require_paid("Unlimited session mining")
+            );
+            std::process::exit(1);
+        }
+    }
 
     if let Some(path) = file {
         // Mine a single session file
@@ -1105,6 +1131,9 @@ fn rtk_weighted_avg_tokens() -> f64 {
 }
 
 fn cmd_savings() -> Result<()> {
+    if license::tier() == license::Tier::Free {
+        return Err(license::require_paid("Savings estimation"));
+    }
     let data_dir = db::data_dir()?;
     let model = TokenModel::default();
 
@@ -1302,6 +1331,9 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
 // =============================================================================
 
 fn cmd_mail(action: MailAction) -> Result<()> {
+    if license::tier() == license::Tier::Free {
+        return Err(license::require_paid("Email sending"));
+    }
     match action {
         MailAction::Setup => mail::cmd_mail_setup(),
         MailAction::Report { to, attachments } => mail::cmd_mail_report(&to, &attachments),

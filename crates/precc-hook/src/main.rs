@@ -22,7 +22,7 @@
 //! - Heuristics DB opened read-only, skipped if file doesn't exist
 //! - Schema init skipped (precc init handles it)
 
-use precc_core::{context, db, rtk, skills};
+use precc_core::{context, db, license, rtk, skills};
 use serde_json::Value;
 use std::io::{Read, Write};
 
@@ -152,10 +152,25 @@ impl Pipeline {
             _ => return,
         };
 
-        let matches = match skills::find_matches(&conn, &self.command, SUGGEST_THRESHOLD) {
+        let mut matches = match skills::find_matches(&conn, &self.command, SUGGEST_THRESHOLD) {
             Ok(m) => m,
             Err(_) => return,
         };
+
+        // License gate: Free tier may only use builtin skills plus FREE_SKILL_LIMIT mined ones.
+        // Mined skills are capped (builtins are always allowed).
+        // We count mined slots used so far this call and drop excess matches.
+        if license::tier() == license::Tier::Free {
+            let mut mined_seen = 0usize;
+            matches.retain(|m| {
+                if m.source == "builtin" {
+                    true
+                } else {
+                    mined_seen += 1;
+                    mined_seen <= precc_core::FREE_SKILL_LIMIT
+                }
+            });
+        }
 
         // Portfolio application: apply all compatible high-confidence skills.
         //
