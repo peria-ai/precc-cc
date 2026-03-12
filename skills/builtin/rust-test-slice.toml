@@ -1,0 +1,20 @@
+[skill]
+name = "rust-test-slice"
+description = "Slice cargo test output to show only failures and summary — saves ~200-800 tokens on large test suites by filtering passing test noise"
+source = "builtin"
+priority = 44
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+test\b'
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "Cargo.toml"
+weight = 0.5
+
+[[actions]]
+type = "rewrite_command"
+template = "{{original_command}} 2>&1 | grep -E '(^test |FAILED|^error|^running|^test result|failures:)' | tail -30"
+confidence = 0.75

@@ -1,7 +1,7 @@
 [skill]
 name = "precc-token-saver"
 description = "Route every shell command through the PRECC hook to auto-fix wrong-directory errors, compress CLI output (60-90%), and apply learned correction heuristics — saving 34%+ of API token spend automatically."
-version = "0.1.3"
+version = "0.1.9"
 author = "yijunyu"
 tags = ["token-saving", "precc", "bash", "productivity", "ai-agent"]
 

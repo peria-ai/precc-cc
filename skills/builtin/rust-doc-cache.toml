@@ -1,0 +1,20 @@
+[skill]
+name = "rust-doc-cache"
+description = "Cache cargo doc output to avoid regenerating rustdoc for unchanged crates — saves ~500 tokens per repeated doc generation"
+source = "builtin"
+priority = 45
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+doc\b'
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "Cargo.toml"
+weight = 0.5
+
+[[actions]]
+type = "rewrite_command"
+template = "if [ -d target/doc ] && [ target/doc -nt Cargo.toml ]; then echo 'docs up-to-date (cached)'; ls target/doc/*.html 2>/dev/null | head -5; else {{original_command}}; fi"
+confidence = 0.8

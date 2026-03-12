@@ -1,0 +1,20 @@
+[skill]
+name = "rust-check-before-build"
+description = "Replace cargo build with cargo check when only type-checking is needed — 2-5x faster, saves ~300 tokens from shorter output"
+source = "builtin"
+priority = 46
+
+[[triggers]]
+type = "command_regex"
+pattern = '^cargo\s+build\s*$'
+weight = 1.0
+
+[[triggers]]
+type = "file_exists"
+pattern = "Cargo.toml"
+weight = 0.5
+
+[[actions]]
+type = "rewrite_command"
+template = "cargo check 2>&1 | tail -3"
+confidence = 0.7

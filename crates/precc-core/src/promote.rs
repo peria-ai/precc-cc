@@ -303,6 +303,16 @@ fn generate_skill_name(failure_cmd: &str, fix_cmd: &str) -> String {
         .collect()
 }
 
+/// Public wrapper for `generate_trigger_regex` (used by advisor).
+pub fn generate_trigger_regex_pub(failure_cmd: &str) -> String {
+    generate_trigger_regex(failure_cmd)
+}
+
+/// Public wrapper for `generate_action` (used by advisor).
+pub fn generate_action_pub(failure_cmd: &str, fix_cmd: &str) -> (String, String) {
+    generate_action(failure_cmd, fix_cmd)
+}
+
 /// Generate a regex trigger pattern from a failure command.
 fn generate_trigger_regex(failure_cmd: &str) -> String {
     let words: Vec<&str> = failure_cmd.split_whitespace().take(2).collect();

@@ -9,7 +9,9 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use precc_core::{db, gdb, license, metrics, mining, rtk, skills};
+use precc_core::{
+    advisor, consent, db, gdb, license, metrics, mining, promote, rtk, sharing, skills, telemetry,
+};
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
 
@@ -88,6 +90,11 @@ enum Commands {
     },
     /// Print a cache_control systemPrompt block for Anthropic API users (prompt caching)
     CacheHint,
+    /// Manage anonymous telemetry consent
+    Telemetry {
+        #[command(subcommand)]
+        action: TelemetryAction,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -143,6 +150,30 @@ enum SkillsAction {
     Export { name: String },
     /// Edit a skill's triggers/actions in $EDITOR and reimport on save
     Edit { name: String },
+    /// Suggest new skills and flag ineffective ones
+    Advise {
+        /// Auto-disable ineffective mined skills
+        #[arg(long)]
+        auto_disable: bool,
+        /// Accept and create a suggested skill by name
+        #[arg(long)]
+        accept: Option<String>,
+        /// Share a skill to the team repository (generates TOML and token credits)
+        #[arg(long)]
+        share: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum TelemetryAction {
+    /// Opt in to anonymous usage telemetry (requires explicit consent)
+    Consent,
+    /// Revoke telemetry consent
+    Revoke,
+    /// Show current telemetry consent status
+    Status,
+    /// Preview the exact data that would be sent (dry-run)
+    Preview,
 }
 
 fn main() -> Result<()> {
@@ -182,6 +213,7 @@ fn main() -> Result<()> {
         Some(Commands::Mail { action }) => cmd_mail(action),
         Some(Commands::Update { force, version }) => cmd_update(force, version),
         Some(Commands::CacheHint) => cmd_cache_hint(),
+        Some(Commands::Telemetry { action }) => cmd_telemetry(action),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -277,6 +309,18 @@ fn cmd_init() -> Result<()> {
         (
             "mail-report",
             include_str!("../../../skills/builtin/mail-report.toml"),
+        ),
+        (
+            "rust-doc-cache",
+            include_str!("../../../skills/builtin/rust-doc-cache.toml"),
+        ),
+        (
+            "rust-check-before-build",
+            include_str!("../../../skills/builtin/rust-check-before-build.toml"),
+        ),
+        (
+            "rust-test-slice",
+            include_str!("../../../skills/builtin/rust-test-slice.toml"),
         ),
     ];
     let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;
@@ -449,6 +493,11 @@ fn cmd_skills(action: Option<SkillsAction>) -> Result<()> {
         Some(SkillsAction::Show { name }) => cmd_skills_show(&conn, &name),
         Some(SkillsAction::Export { name }) => cmd_skills_export(&conn, &name),
         Some(SkillsAction::Edit { name }) => cmd_skills_edit(&conn, &name),
+        Some(SkillsAction::Advise {
+            auto_disable,
+            accept,
+            share,
+        }) => cmd_skills_advise(&data_dir, &conn, auto_disable, accept, share),
     }
 }
 
@@ -757,6 +806,256 @@ fn write_skill_toml(
 }
 
 // =============================================================================
+// precc skills advise
+// =============================================================================
+
+fn cmd_skills_advise(
+    data_dir: &std::path::Path,
+    heuristics_conn: &rusqlite::Connection,
+    auto_disable: bool,
+    accept: Option<String>,
+    share: Option<String>,
+) -> Result<()> {
+    // Handle --share: export a skill and record sharing credits
+    if let Some(ref skill_name) = share {
+        let toml_content = sharing::export_skill_toml(heuristics_conn, skill_name)?;
+        sharing::record_share(heuristics_conn, skill_name, &toml_content)?;
+        sharing::update_credits(heuristics_conn)?;
+
+        println!("Shared skill: {skill_name}");
+        println!();
+        println!("TOML (copy to your team skill repository):");
+        println!("---");
+        println!("{toml_content}");
+        println!("---");
+        println!();
+
+        let summary = sharing::credit_summary(heuristics_conn)?;
+        println!("Sharing Credits");
+        println!("---------------");
+        println!("  Skills shared       : {}", summary.skills_shared);
+        println!("  Total activations   : {}", summary.total_activations);
+        println!("  Total tokens saved  : {:.0}", summary.total_tokens_saved);
+        println!(
+            "  Credits earned (10%): {:.0} tokens",
+            summary.total_credits_earned
+        );
+        return Ok(());
+    }
+
+    // Handle --accept: create a suggested skill from failure-fix pairs
+    if let Some(ref suggested_name) = accept {
+        let history_conn = db::open_history(data_dir)?;
+        let report = advisor::advise(heuristics_conn, &history_conn, false)?;
+
+        let suggestion = report
+            .suggestions
+            .iter()
+            .find(|s| s.name == *suggested_name);
+
+        match suggestion {
+            Some(s) => {
+                // Promote this pattern immediately
+                promote::promote_patterns(
+                    &history_conn,
+                    heuristics_conn,
+                    Some(1), // lower threshold to force promotion
+                )?;
+                println!("Accepted suggestion: {}", s.name);
+                println!("  Trigger: {}", s.trigger_pattern);
+                println!("  Fix:     {}", s.fix_template);
+                println!(
+                    "  Est. savings: {:.0} tok/hit × {} hits = {:.0} tok",
+                    s.est_tokens_per_hit,
+                    s.occurrences,
+                    s.est_tokens_per_hit * s.occurrences as f64
+                );
+            }
+            None => {
+                bail!(
+                    "No suggestion named '{}'. Run `precc skills advise` to see available suggestions.",
+                    suggested_name
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // Default: show the full advisor report
+    let history_conn = db::open_history(data_dir)?;
+    let report = advisor::advise(heuristics_conn, &history_conn, auto_disable)?;
+
+    // ── Suggested new skills ────────────────────────────────────────────────
+    println!("Skill Advisor");
+    println!("=============");
+    println!();
+
+    if report.suggestions.is_empty() {
+        println!("Suggestions: none (all known patterns are covered by existing skills)");
+    } else {
+        println!("Suggested Skills ({} found)", report.suggestions.len());
+        println!("{}", "-".repeat(50));
+        for (i, s) in report.suggestions.iter().enumerate() {
+            let proj = s.project_type.as_deref().unwrap_or("?");
+            println!("  {}. {} [{}]", i + 1, s.name, proj);
+            println!("     {}", s.reason);
+            println!("     Trigger:  {}", s.trigger_pattern);
+            println!("     Fix:      {}", truncate_str(&s.fix_template, 60));
+            println!(
+                "     Savings:  ~{:.0} tok/hit × {} hits = ~{:.0} tok total",
+                s.est_tokens_per_hit,
+                s.occurrences,
+                s.est_tokens_per_hit * s.occurrences as f64
+            );
+            println!();
+        }
+        println!("  Accept a suggestion:  precc skills advise --accept <name>");
+    }
+    println!();
+
+    // ── Ineffective skills ──────────────────────────────────────────────────
+    if report.ineffective.is_empty() {
+        println!("Ineffective Skills: none (all enabled skills are performing well)");
+    } else {
+        println!("Ineffective Skills ({} found)", report.ineffective.len());
+        println!("{}", "-".repeat(50));
+        println!(
+            "  {:<25} {:<8} {:>5} {:>5} {:>5} {:>7}  Status",
+            "Name", "Source", "Acts", "OK", "Fail", "Rate"
+        );
+        for s in &report.ineffective {
+            let status = if s.auto_disabled {
+                "DISABLED"
+            } else {
+                "flagged"
+            };
+            println!(
+                "  {:<25} {:<8} {:>5} {:>5} {:>5} {:>6.0}%  {}",
+                truncate_str(&s.name, 25),
+                truncate_str(&s.source, 7),
+                s.activated,
+                s.succeeded,
+                s.failed,
+                s.failure_rate * 100.0,
+                status,
+            );
+        }
+        println!();
+
+        if report.disabled_count > 0 {
+            println!("  {} skill(s) auto-disabled.", report.disabled_count);
+        } else if !auto_disable {
+            println!(
+                "  To auto-disable ineffective mined skills: precc skills advise --auto-disable"
+            );
+        }
+    }
+    println!();
+
+    // ── Token optimization analysis ─────────────────────────────────────────
+    if let Ok(skill_rows) = telemetry::per_skill_stats(heuristics_conn) {
+        if !skill_rows.is_empty() {
+            let total_tokens: f64 = skill_rows.iter().map(|s| s.est_tokens_saved).sum();
+            let total_acts: i64 = skill_rows.iter().map(|s| s.activated).sum();
+
+            println!("Token Optimization Analysis");
+            println!("--------------------------");
+            for row in &skill_rows {
+                let efficiency = if row.activated > 0 {
+                    row.est_tokens_saved / row.activated as f64
+                } else {
+                    0.0
+                };
+                let pct = if total_tokens > 0.0 {
+                    row.est_tokens_saved / total_tokens * 100.0
+                } else {
+                    0.0
+                };
+                let fail_rate = if row.activated > 0 {
+                    row.failed as f64 / row.activated as f64 * 100.0
+                } else {
+                    0.0
+                };
+
+                let rating = if fail_rate > 30.0 {
+                    "POOR"
+                } else if fail_rate > 10.0 {
+                    "FAIR"
+                } else if pct > 20.0 {
+                    "HIGH"
+                } else {
+                    "OK"
+                };
+
+                println!(
+                    "  {:<25} {:>5.1}% of savings  {:>5.0} tok/act  fail:{:>4.0}%  [{}]",
+                    truncate_str(&row.skill_name, 25),
+                    pct,
+                    efficiency,
+                    fail_rate,
+                    rating,
+                );
+            }
+
+            println!();
+            println!(
+                "  Total: {:.0} tokens saved across {} activations ({:.0} tok/act avg)",
+                total_tokens,
+                total_acts,
+                if total_acts > 0 {
+                    total_tokens / total_acts as f64
+                } else {
+                    0.0
+                },
+            );
+            println!();
+        }
+    }
+
+    // ── Token optimization recommendations ────────────────────────────────
+    if !report.optimizations.is_empty() {
+        println!(
+            "Token Optimization Recommendations ({} found)",
+            report.optimizations.len()
+        );
+        println!("{}", "-".repeat(50));
+        for (i, opt) in report.optimizations.iter().enumerate() {
+            println!("  {}. [{}]", i + 1, opt.skill_name);
+            println!("     {}", opt.optimization);
+            println!(
+                "     Est. saving: ~{:.0} tok/act × {} acts = ~{:.0} tok",
+                opt.est_savings_per_act,
+                opt.activations,
+                opt.est_savings_per_act * opt.activations as f64,
+            );
+            println!();
+        }
+    }
+
+    // ── Sharing credits summary ─────────────────────────────────────────────
+    let credit_summary = sharing::credit_summary(heuristics_conn)?;
+    if credit_summary.skills_shared > 0 {
+        sharing::update_credits(heuristics_conn)?;
+        let updated = sharing::credit_summary(heuristics_conn)?;
+        println!("Sharing Credits");
+        println!("---------------");
+        println!("  Skills shared       : {}", updated.skills_shared);
+        println!("  Total activations   : {}", updated.total_activations);
+        println!("  Total tokens saved  : {:.0}", updated.total_tokens_saved);
+        println!(
+            "  Credits earned (10%): {:.0} tokens",
+            updated.total_credits_earned
+        );
+        println!();
+        println!("  Share a skill: precc skills advise --share <name>");
+    } else {
+        println!("Sharing: no skills shared yet.  Share with: precc skills advise --share <name>");
+    }
+
+    Ok(())
+}
+
+// =============================================================================
 // precc debug
 // =============================================================================
 
@@ -933,6 +1232,56 @@ fn cmd_report() -> Result<()> {
             }
             println!();
         }
+
+        // Per-skill ablation breakdown
+        if let Ok(skill_rows) = telemetry::per_skill_stats(&heuristics_conn) {
+            if !skill_rows.is_empty() {
+                let total_tokens: f64 = skill_rows.iter().map(|s| s.est_tokens_saved).sum();
+
+                println!("Per-Skill Savings Breakdown");
+                println!("--------------------------");
+                println!(
+                    "  {:<25} {:>6} {:>7} {:>5} {:>15}",
+                    "Skill", "Acts", "OK", "Fail", "Est. Tokens"
+                );
+                for row in &skill_rows {
+                    println!(
+                        "  {:<25} {:>6} {:>7} {:>5} {:>15.0}",
+                        truncate_str(&row.skill_name, 25),
+                        row.activated,
+                        row.succeeded,
+                        row.failed,
+                        row.est_tokens_saved,
+                    );
+                }
+                println!(
+                    "  {:<25} {:>6} {:>7} {:>5} {:>15.0}",
+                    "TOTAL",
+                    skill_rows.iter().map(|s| s.activated).sum::<i64>(),
+                    skill_rows.iter().map(|s| s.succeeded).sum::<i64>(),
+                    skill_rows.iter().map(|s| s.failed).sum::<i64>(),
+                    total_tokens,
+                );
+                println!();
+
+                // Ablation bar chart
+                if total_tokens > 0.0 {
+                    println!("Ablation (skill contribution to savings)");
+                    println!("-----------------------------------------");
+                    for row in &skill_rows {
+                        let pct = row.est_tokens_saved / total_tokens * 100.0;
+                        let bar_len = (pct / 2.5).round() as usize; // 40 chars = 100%
+                        let bar = "|".repeat(bar_len);
+                        println!(
+                            "  {:<25} {:>5.1}%  {bar}",
+                            truncate_str(&row.skill_name, 25),
+                            pct,
+                        );
+                    }
+                    println!();
+                }
+            }
+        }
     }
 
     // History summary
@@ -985,6 +1334,19 @@ fn cmd_report() -> Result<()> {
         }
     }
 
+    // Hook latency percentiles
+    if let Ok(metrics_conn) = db::open_metrics(&data_dir) {
+        let lat = telemetry::hook_latency_percentiles(&metrics_conn)?;
+        if lat.count > 0 {
+            println!("Hook Latency Percentiles");
+            println!("------------------------");
+            println!("  p50: {:.2} ms", lat.p50_ms);
+            println!("  p99: {:.2} ms", lat.p99_ms);
+            println!("  Samples: {}", lat.count);
+            println!();
+        }
+    }
+
     // Database sizes
     println!("Database Sizes");
     println!("--------------");
@@ -999,6 +1361,9 @@ fn cmd_report() -> Result<()> {
             println!("  {name:<16} (not created)");
         }
     }
+
+    // Telemetry: send anonymous aggregated data if consented (rate-limited)
+    let _ = telemetry::maybe_send(&data_dir);
 
     Ok(())
 }
@@ -1261,6 +1626,32 @@ fn cmd_savings() -> Result<()> {
         println!("  PRECC share of savings: {:>7.1}%", precc_pct);
     }
     println!();
+
+    // ---- Per-skill ablation (PRECC-over-RTK only) -------------------------
+    if let Ok(heuristics_conn) = db::open_heuristics(&data_dir) {
+        if let Ok(skill_rows) = telemetry::per_skill_stats(&heuristics_conn) {
+            if !skill_rows.is_empty() {
+                let total_skill_tokens: f64 = skill_rows.iter().map(|s| s.est_tokens_saved).sum();
+                println!("Per-Skill Ablation (PRECC-over-RTK)");
+                println!("-----------------------------------");
+                for row in &skill_rows {
+                    let pct = if total_skill_tokens > 0.0 {
+                        row.est_tokens_saved / total_skill_tokens * 100.0
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "  {:<25} : {:>8.0} tok  ({:>5.1}%)",
+                        truncate_str(&row.skill_name, 25),
+                        row.est_tokens_saved,
+                        pct,
+                    );
+                }
+                println!();
+            }
+        }
+    }
+
     println!("Note: figures are estimates based on conservative medians per event.");
     println!(
         "      RTK ~{:.0} tok/rewrite (weighted avg), CD-miss ~{:.0} tok, skill ~{:.0} tok, pattern ~{:.0} tok.",
@@ -1269,6 +1660,9 @@ fn cmd_savings() -> Result<()> {
         model.precc_per_skill_activation,
         model.precc_per_mined_occurrence,
     );
+
+    // Telemetry: send anonymous aggregated data if consented (rate-limited)
+    let _ = telemetry::maybe_send(&data_dir);
 
     Ok(())
 }
@@ -1359,6 +1753,75 @@ fn cmd_mail(action: MailAction) -> Result<()> {
         } => {
             mail::send_mail(&to, &subject, &body, &attachments)?;
             println!("Email sent to {to}");
+            Ok(())
+        }
+    }
+}
+
+// =============================================================================
+// Telemetry
+// =============================================================================
+
+fn cmd_telemetry(action: TelemetryAction) -> Result<()> {
+    match action {
+        TelemetryAction::Consent => {
+            println!("PRECC Anonymous Telemetry");
+            println!("========================");
+            println!();
+            println!("By opting in, PRECC will periodically send aggregated, anonymous");
+            println!("usage data to help improve the tool.  Data includes:");
+            println!();
+            println!("  - Per-skill activation, success, and failure counts");
+            println!("  - Token savings estimates per pillar (aggregated totals)");
+            println!("  - Hook latency percentiles (p50, p99)");
+            println!("  - PRECC version, OS, architecture, license tier");
+            println!();
+            println!("NO personally identifiable information is collected:");
+            println!("  - No commands, file paths, or project names");
+            println!("  - No usernames, hostnames, or machine IDs");
+            println!("  - No session content or code");
+            println!();
+            println!("You can revoke consent at any time with: precc telemetry revoke");
+            println!("You can also disable all telemetry with: PRECC_NO_TELEMETRY=1");
+            println!();
+            print!("Do you consent to anonymous telemetry? [yes/no]: ");
+            std::io::stdout().flush()?;
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let answer = input.trim().to_lowercase();
+
+            if answer == "yes" || answer == "y" {
+                consent::save(true)?;
+                println!("Telemetry enabled.  Thank you!");
+            } else {
+                println!("Telemetry NOT enabled.  No data will be sent.");
+            }
+            Ok(())
+        }
+        TelemetryAction::Revoke => {
+            consent::save(false)?;
+            println!("Telemetry consent revoked.  No data will be sent.");
+            Ok(())
+        }
+        TelemetryAction::Status => {
+            if std::env::var("PRECC_NO_TELEMETRY").is_ok() {
+                println!("Telemetry: DISABLED (PRECC_NO_TELEMETRY is set)");
+            } else if consent::is_telemetry_enabled() {
+                println!("Telemetry: ENABLED (consent v{})", consent::CONSENT_VERSION);
+            } else {
+                println!("Telemetry: NOT ENABLED");
+                println!("  Run `precc telemetry consent` to opt in.");
+            }
+            Ok(())
+        }
+        TelemetryAction::Preview => {
+            let data_dir = db::data_dir()?;
+            let payload = telemetry::build_payload(&data_dir)?;
+            let json = serde_json::to_string_pretty(&payload)?;
+            println!("Telemetry payload preview (this is exactly what would be sent):");
+            println!();
+            println!("{json}");
             Ok(())
         }
     }

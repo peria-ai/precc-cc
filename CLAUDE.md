@@ -28,7 +28,7 @@ Four crates in a workspace:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
-| `precc-core` | lib | Shared logic: context resolution, skill matching, GDB, DB, mining, metrics, RTK rewriting |
+| `precc-core` | lib | Shared logic: context resolution, skill matching, GDB, DB, mining, metrics, RTK rewriting, advisor, sharing, telemetry |
 | `precc-hook` | bin | PreToolUse:Bash hook binary — must complete in < 5ms |
 | `precc-cli` | bin | User-facing CLI: `precc ingest`, `precc skills`, `precc debug`, `precc report` |
 | `precc-miner` | bin | Background daemon that mines session logs for failure patterns |
