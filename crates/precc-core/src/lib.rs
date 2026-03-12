@@ -10,6 +10,7 @@ pub mod grep_filter;
 pub mod license;
 pub mod metrics;
 pub mod mining;
+pub mod post_observe;
 pub mod promote;
 pub mod read_filter;
 pub mod rtk;

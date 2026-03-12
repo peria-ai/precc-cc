@@ -21,7 +21,8 @@
 //! - Schema init skipped (precc init handles it)
 
 use precc_core::{
-    agent_propagate, context, db, grep_filter, license, read_filter, rtk, skills, update_check,
+    agent_propagate, context, db, grep_filter, license, post_observe, read_filter, rtk, skills,
+    update_check,
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -45,8 +46,14 @@ fn run() -> anyhow::Result<()> {
     // Stage 1: Parse JSON from stdin
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
+    let input_len = input.len() as u64;
 
     let hook_input: Value = serde_json::from_str(&input)?;
+
+    let hook_event = hook_input
+        .get("hook_event_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("PreToolUse");
 
     let tool_name = hook_input
         .get("tool_name")
@@ -58,12 +65,18 @@ fn run() -> anyhow::Result<()> {
         .cloned()
         .unwrap_or(Value::Object(Default::default()));
 
-    match tool_name {
-        "Bash" => run_bash_pipeline(&hook_input, &tool_input, t_start),
-        "Read" => run_read_filter(&tool_input, t_start),
-        "Grep" => run_grep_filter(&tool_input, t_start),
-        "Agent" => run_agent_propagate(&tool_input, t_start),
-        _ => Ok(()), // Unknown tool — approve unchanged
+    match hook_event {
+        "PostToolUse" => run_post_observe(&hook_input, &tool_input, tool_name, input_len, t_start),
+        _ => {
+            // PreToolUse (default)
+            match tool_name {
+                "Bash" => run_bash_pipeline(&hook_input, &tool_input, t_start),
+                "Read" => run_read_filter(&tool_input, t_start),
+                "Grep" => run_grep_filter(&tool_input, t_start),
+                "Agent" => run_agent_propagate(&tool_input, t_start),
+                _ => Ok(()), // Unknown tool — approve unchanged
+            }
+        }
     }
 }
 
@@ -270,6 +283,134 @@ fn run_agent_propagate(tool_input: &Value, t_start: std::time::Instant) -> anyho
     append_metrics_log_tool("agent_propagate", t_start);
 
     Ok(())
+}
+
+// =============================================================================
+// PostToolUse observability
+// =============================================================================
+
+fn run_post_observe(
+    hook_input: &Value,
+    tool_input: &Value,
+    tool_name: &str,
+    input_len: u64,
+    t_start: std::time::Instant,
+) -> anyhow::Result<()> {
+    let data_dir = match db::data_dir() {
+        Ok(d) => d,
+        Err(_) => return Ok(()), // No data dir — skip silently
+    };
+
+    let session_id = hook_input
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    // Estimate output size from tool_response if present, else from raw input length
+    let tool_response = hook_input.get("tool_response");
+    let (output_bytes, estimated_tokens) = if let Some(resp) = tool_response {
+        let tokens = post_observe::estimate_tokens(resp);
+        let bytes = serde_json::to_string(resp)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+        (bytes, tokens)
+    } else {
+        // Fallback: estimate from total input minus overhead (~200 bytes envelope)
+        let effective = input_len.saturating_sub(200);
+        (effective, post_observe::tokens_from_bytes(effective))
+    };
+
+    // Compute command hash for dedup
+    let cmd_hash = post_observe::hash_command(tool_name, tool_input);
+
+    // Check for duplicates
+    let duplicate_count = post_observe::check_duplicate(&data_dir, session_id, cmd_hash);
+
+    // Check for large output
+    let is_large = post_observe::is_large_output(estimated_tokens);
+
+    // Log the observation
+    post_observe::append_observation(
+        &data_dir,
+        session_id,
+        tool_name,
+        cmd_hash,
+        output_bytes,
+        estimated_tokens,
+    );
+
+    // Build waste report
+    let report = post_observe::WasteReport {
+        duplicate_count,
+        is_large,
+        estimated_tokens,
+        output_bytes,
+    };
+
+    // Emit additionalContext if waste detected
+    if let Some(context) = report.advisory_context(tool_name) {
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": context
+            }
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    }
+
+    // Append metrics
+    append_metrics_log_post(tool_name, output_bytes, estimated_tokens, &report, t_start);
+
+    Ok(())
+}
+
+/// Append PostToolUse metrics to metrics.log.
+fn append_metrics_log_post(
+    tool_name: &str,
+    output_bytes: u64,
+    estimated_tokens: u64,
+    report: &post_observe::WasteReport,
+    t_start: std::time::Instant,
+) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let log_path = std::path::Path::new(&home).join(".local/share/precc/metrics.log");
+
+    let mut lines = format!(
+        "{{\"ts\":{},\"type\":\"hook_latency_post\",\"value\":{:.3}}}\n\
+         {{\"ts\":{},\"type\":\"post_output_bytes\",\"value\":{}.0}}\n\
+         {{\"ts\":{},\"type\":\"post_output_tokens\",\"value\":{}.0}}\n\
+         {{\"ts\":{},\"type\":\"post_tool_{}\",\"value\":{}.0}}\n",
+        ts, latency_ms, ts, output_bytes, ts, estimated_tokens, ts, tool_name, estimated_tokens
+    );
+
+    if report.duplicate_count.is_some() {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"post_duplicate_detected\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+    if report.is_large {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"post_large_output\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| f.write_all(lines.as_bytes()));
 }
 
 // =============================================================================
@@ -820,5 +961,262 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(parsed["type"].as_str(), Some("hook_latency"));
         assert!((parsed["value"].as_f64().unwrap() - 2.93).abs() < 0.001);
+    }
+
+    // =========================================================================
+    // emit_deny output format
+    // =========================================================================
+
+    #[test]
+    fn emit_deny_format() {
+        let reason = "PRECC: blocked binary file (.png)";
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason
+            }
+        });
+        let s = serde_json::to_string(&output).unwrap();
+        assert!(s.contains("\"deny\""));
+        assert!(s.contains(".png"));
+        assert!(s.contains("PreToolUse"));
+    }
+
+    // =========================================================================
+    // Read filter integration (JSON output shape)
+    // =========================================================================
+
+    #[test]
+    fn read_filter_deny_output_shape() {
+        // Simulate the deny output for a binary file
+        let reason = "PRECC: blocked binary file (.wasm) — use a dedicated tool for this file type";
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason
+            }
+        });
+        let parsed: Value = serde_json::from_str(&serde_json::to_string(&output).unwrap()).unwrap();
+        assert_eq!(
+            parsed["hookSpecificOutput"]["permissionDecision"]
+                .as_str()
+                .unwrap(),
+            "deny"
+        );
+        assert!(parsed["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains(".wasm"));
+    }
+
+    #[test]
+    fn read_filter_limit_injection_output_shape() {
+        // Simulate the allow output with injected limit
+        let mut updated_input = serde_json::json!({"file_path": "/tmp/big.rs", "offset": 0});
+        updated_input
+            .as_object_mut()
+            .unwrap()
+            .insert("limit".to_string(), Value::Number(500.into()));
+
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "PRECC: read-filter (limit injection)",
+                "updatedInput": updated_input
+            }
+        });
+
+        let parsed: Value = serde_json::from_str(&serde_json::to_string(&output).unwrap()).unwrap();
+        assert_eq!(
+            parsed["hookSpecificOutput"]["updatedInput"]["limit"]
+                .as_u64()
+                .unwrap(),
+            500
+        );
+        assert_eq!(
+            parsed["hookSpecificOutput"]["permissionDecision"]
+                .as_str()
+                .unwrap(),
+            "allow"
+        );
+    }
+
+    // =========================================================================
+    // Grep filter integration (JSON output shape)
+    // =========================================================================
+
+    #[test]
+    fn grep_filter_head_limit_output_shape() {
+        let mut updated_input = serde_json::json!({"pattern": "fn main", "output_mode": "content"});
+        updated_input
+            .as_object_mut()
+            .unwrap()
+            .insert("head_limit".to_string(), Value::Number(50.into()));
+
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "PRECC: grep-filter (head_limit injection)",
+                "updatedInput": updated_input
+            }
+        });
+
+        let parsed: Value = serde_json::from_str(&serde_json::to_string(&output).unwrap()).unwrap();
+        assert_eq!(
+            parsed["hookSpecificOutput"]["updatedInput"]["head_limit"]
+                .as_u64()
+                .unwrap(),
+            50
+        );
+    }
+
+    #[test]
+    fn grep_filter_type_injection_output_shape() {
+        let mut updated_input = serde_json::json!({"pattern": "foo"});
+        updated_input
+            .as_object_mut()
+            .unwrap()
+            .insert("type".to_string(), Value::String("rust".to_string()));
+
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "PRECC: grep-filter (auto type filter)",
+                "updatedInput": updated_input
+            }
+        });
+
+        let parsed: Value = serde_json::from_str(&serde_json::to_string(&output).unwrap()).unwrap();
+        assert_eq!(
+            parsed["hookSpecificOutput"]["updatedInput"]["type"]
+                .as_str()
+                .unwrap(),
+            "rust"
+        );
+    }
+
+    #[test]
+    fn grep_filter_combined_reasons() {
+        let reasons = vec!["head_limit injection", "auto type filter"];
+        let reason = format!("PRECC: grep-filter ({})", reasons.join(", "));
+        assert_eq!(
+            reason,
+            "PRECC: grep-filter (head_limit injection, auto type filter)"
+        );
+    }
+
+    // =========================================================================
+    // Agent propagation integration (JSON output shape)
+    // =========================================================================
+
+    #[test]
+    fn agent_propagate_output_shape() {
+        let original_prompt = "Find all test files";
+        let new_prompt = precc_core::agent_propagate::inject_hooks_frontmatter(original_prompt);
+
+        let mut updated_input = serde_json::json!({
+            "prompt": original_prompt,
+            "subagent_type": "Explore"
+        });
+        updated_input
+            .as_object_mut()
+            .unwrap()
+            .insert("prompt".to_string(), Value::String(new_prompt.clone()));
+
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "PRECC: agent-propagate (subagent hook injection)",
+                "updatedInput": updated_input
+            }
+        });
+
+        let parsed: Value = serde_json::from_str(&serde_json::to_string(&output).unwrap()).unwrap();
+        let updated_prompt = parsed["hookSpecificOutput"]["updatedInput"]["prompt"]
+            .as_str()
+            .unwrap();
+        assert!(updated_prompt.contains("precc-hook"));
+        assert!(updated_prompt.contains("Find all test files"));
+        // subagent_type should be preserved
+        assert_eq!(
+            parsed["hookSpecificOutput"]["updatedInput"]["subagent_type"]
+                .as_str()
+                .unwrap(),
+            "Explore"
+        );
+    }
+
+    #[test]
+    fn agent_propagate_preserves_other_fields() {
+        let mut updated_input = serde_json::json!({
+            "prompt": "test",
+            "subagent_type": "general-purpose",
+            "description": "search for files",
+            "model": "sonnet"
+        });
+        let new_prompt = precc_core::agent_propagate::inject_hooks_frontmatter("test");
+        updated_input
+            .as_object_mut()
+            .unwrap()
+            .insert("prompt".to_string(), Value::String(new_prompt));
+
+        // Other fields should remain unchanged
+        assert_eq!(
+            updated_input["subagent_type"].as_str().unwrap(),
+            "general-purpose"
+        );
+        assert_eq!(
+            updated_input["description"].as_str().unwrap(),
+            "search for files"
+        );
+        assert_eq!(updated_input["model"].as_str().unwrap(), "sonnet");
+    }
+
+    // =========================================================================
+    // Tool-specific metrics log format
+    // =========================================================================
+
+    #[test]
+    fn tool_metrics_log_line_format() {
+        // Verify the tool-specific metric JSON line format
+        let ts = 1000u64;
+        let tool_type = "read_filter";
+        let latency_ms = 1.5f64;
+
+        let lines = format!(
+            "{{\"ts\":{},\"type\":\"hook_latency_{}\",\"value\":{:.3}}}\n\
+             {{\"ts\":{},\"type\":\"{}\",\"value\":1.0}}\n",
+            ts, tool_type, latency_ms, ts, tool_type
+        );
+
+        // Should be two valid JSON lines
+        let json_lines: Vec<&str> = lines.trim().split('\n').collect();
+        assert_eq!(json_lines.len(), 2);
+
+        let latency_line: Value = serde_json::from_str(json_lines[0]).unwrap();
+        assert_eq!(
+            latency_line["type"].as_str().unwrap(),
+            "hook_latency_read_filter"
+        );
+
+        let counter_line: Value = serde_json::from_str(json_lines[1]).unwrap();
+        assert_eq!(counter_line["type"].as_str().unwrap(), "read_filter");
+        assert!((counter_line["value"].as_f64().unwrap() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn tool_metrics_all_types() {
+        // Verify all tool metric types produce valid JSON
+        for tool_type in &["read_filter", "grep_filter", "agent_propagate"] {
+            let line = format!("{{\"ts\":1000,\"type\":\"{}\",\"value\":1.0}}\n", tool_type);
+            let parsed: Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(parsed["type"].as_str().unwrap(), *tool_type);
+        }
     }
 }

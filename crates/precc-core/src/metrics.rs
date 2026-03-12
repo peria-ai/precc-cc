@@ -137,4 +137,74 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
     }
+
+    #[test]
+    fn custom_metric_type_as_str() {
+        assert_eq!(MetricType::Custom("read_filter").as_str(), "read_filter");
+        assert_eq!(MetricType::Custom("grep_filter").as_str(), "grep_filter");
+        assert_eq!(
+            MetricType::Custom("agent_propagate").as_str(),
+            "agent_propagate"
+        );
+    }
+
+    #[test]
+    fn record_and_query_custom_metric() {
+        let conn = test_db();
+        record(&conn, MetricType::Custom("read_filter"), 1.0, None).unwrap();
+        record(&conn, MetricType::Custom("read_filter"), 1.0, None).unwrap();
+        record(&conn, MetricType::Custom("read_filter"), 1.0, None).unwrap();
+
+        let s = summary(&conn, MetricType::Custom("read_filter"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.count, 3);
+        assert!((s.total - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn custom_metrics_isolated_from_each_other() {
+        let conn = test_db();
+        record(&conn, MetricType::Custom("read_filter"), 1.0, None).unwrap();
+        record(&conn, MetricType::Custom("read_filter"), 1.0, None).unwrap();
+        record(&conn, MetricType::Custom("grep_filter"), 1.0, None).unwrap();
+
+        let read_s = summary(&conn, MetricType::Custom("read_filter"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_s.count, 2);
+
+        let grep_s = summary(&conn, MetricType::Custom("grep_filter"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(grep_s.count, 1);
+
+        let agent_s = summary(&conn, MetricType::Custom("agent_propagate")).unwrap();
+        assert!(agent_s.is_none());
+    }
+
+    #[test]
+    fn custom_metrics_isolated_from_builtin() {
+        let conn = test_db();
+        record(&conn, MetricType::HookLatency, 2.5, None).unwrap();
+        record(&conn, MetricType::Custom("read_filter"), 1.0, None).unwrap();
+
+        let builtin_s = summary(&conn, MetricType::HookLatency).unwrap().unwrap();
+        assert_eq!(builtin_s.count, 1);
+
+        let custom_s = summary(&conn, MetricType::Custom("read_filter"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(custom_s.count, 1);
+    }
+
+    #[test]
+    fn all_builtin_metric_types_as_str() {
+        assert_eq!(MetricType::HookLatency.as_str(), "hook_latency");
+        assert_eq!(MetricType::SkillActivation.as_str(), "skill_activation");
+        assert_eq!(MetricType::CdPrepend.as_str(), "cd_prepend");
+        assert_eq!(MetricType::GdbSuggestion.as_str(), "gdb_suggestion");
+        assert_eq!(MetricType::RtkRewrite.as_str(), "rtk_rewrite");
+        assert_eq!(MetricType::MinerTick.as_str(), "miner_tick");
+    }
 }

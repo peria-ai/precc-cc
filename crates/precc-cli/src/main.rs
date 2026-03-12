@@ -1360,6 +1360,66 @@ fn cmd_report() -> Result<()> {
         }
     }
 
+    // PostToolUse observability
+    if let Ok(metrics_conn) = db::open_metrics(&data_dir) {
+        let post_tokens = metrics::summary(
+            &metrics_conn,
+            metrics::MetricType::Custom("post_output_tokens"),
+        )
+        .ok()
+        .flatten();
+        let post_dupes = metrics::summary(
+            &metrics_conn,
+            metrics::MetricType::Custom("post_duplicate_detected"),
+        )
+        .ok()
+        .flatten();
+        let post_large = metrics::summary(
+            &metrics_conn,
+            metrics::MetricType::Custom("post_large_output"),
+        )
+        .ok()
+        .flatten();
+
+        if let Some(tok) = post_tokens {
+            println!("PostToolUse Observability");
+            println!("-------------------------");
+            println!("  Output observations  : {:>8}", tok.count);
+            println!("  Avg output (tokens)  : {:>8.0}", tok.avg);
+            println!("  Total output (tokens): {:>8.0}", tok.total);
+            if let Some(ref large) = post_large {
+                println!("  Large outputs (>10K) : {:>8}", large.count);
+            }
+            if let Some(ref dupes) = post_dupes {
+                println!("  Duplicate commands   : {:>8}", dupes.count);
+                let est_waste = dupes.count as f64 * tok.avg;
+                println!("  Est. wasted tokens   : {:>8.0}", est_waste);
+            }
+
+            // Per-tool breakdown
+            let tool_types = ["Bash", "Read", "Grep"];
+            let mut has_tool_data = false;
+            for tool in &tool_types {
+                let key = format!("post_tool_{}", tool);
+                if let Some(s) = metrics::summary(&metrics_conn, metrics::MetricType::Custom(&key))
+                    .ok()
+                    .flatten()
+                {
+                    if !has_tool_data {
+                        println!();
+                        println!("  Per-tool output:");
+                        has_tool_data = true;
+                    }
+                    println!(
+                        "    {:<8} {:>6} calls, {:>8.0} avg tok, {:>10.0} total tok",
+                        tool, s.count, s.avg, s.total
+                    );
+                }
+            }
+            println!();
+        }
+    }
+
     // Hook latency percentiles
     if let Ok(metrics_conn) = db::open_metrics(&data_dir) {
         let lat = telemetry::hook_latency_percentiles(&metrics_conn)?;
