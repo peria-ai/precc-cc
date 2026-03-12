@@ -188,6 +188,207 @@ fn collect_jsonl_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<
     Ok(())
 }
 
+/// Per-tool byte usage statistics.
+#[derive(Debug, Clone, Default)]
+pub struct ToolBytes {
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub invocations: u64,
+}
+
+/// Token breakdown across all tool types and assistant text in session logs.
+#[derive(Debug, Clone, Default)]
+pub struct SessionTokenBreakdown {
+    /// Per-tool stats keyed by tool name (Bash, Read, Grep, Glob, Edit, Write, etc.)
+    pub tools: HashMap<String, ToolBytes>,
+    /// Bytes of assistant reasoning text (non-tool content blocks)
+    pub assistant_text_bytes: u64,
+    /// Bytes of user text (non-tool content blocks)
+    pub user_text_bytes: u64,
+    /// Bytes of extended thinking blocks
+    pub thinking_bytes: u64,
+    /// Total raw bytes across all session files
+    pub total_raw_bytes: u64,
+}
+
+impl SessionTokenBreakdown {
+    /// Convenience: get ToolBytes for a specific tool.
+    pub fn tool(&self, name: &str) -> ToolBytes {
+        self.tools.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Total bytes across all tools (input + output).
+    pub fn total_tool_bytes(&self) -> u64 {
+        self.tools
+            .values()
+            .map(|t| t.input_bytes + t.output_bytes)
+            .sum()
+    }
+
+    /// Total API-relevant content bytes (tools + text + thinking).
+    /// Excludes progress events, snapshots, metadata, and JSON framing.
+    pub fn api_relevant_bytes(&self) -> u64 {
+        self.total_tool_bytes()
+            + self.assistant_text_bytes
+            + self.user_text_bytes
+            + self.thinking_bytes
+    }
+}
+
+/// Compute a full token breakdown across all session JSONL files.
+///
+/// Scans every content block in every session and attributes bytes to:
+/// - Tool input (by tool name)
+/// - Tool output / tool_result (by tool name)
+/// - Assistant text (reasoning)
+/// - User text
+pub fn session_token_breakdown() -> Result<SessionTokenBreakdown> {
+    let files = find_session_files()?;
+    let mut breakdown = SessionTokenBreakdown::default();
+
+    for path in &files {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            breakdown.total_raw_bytes += meta.len();
+        }
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        accumulate_breakdown(&content, &mut breakdown);
+    }
+
+    Ok(breakdown)
+}
+
+/// Sum the byte sizes of all Bash command inputs and their tool_result outputs
+/// across all session JSONL files. This measures the Bash-specific token footprint.
+///
+/// Returns `(bash_input_bytes, bash_output_bytes)`.
+pub fn bash_total_bytes() -> Result<(u64, u64)> {
+    let bd = session_token_breakdown()?;
+    let bash = bd.tool("Bash");
+    Ok((bash.input_bytes, bash.output_bytes))
+}
+
+/// Accumulate per-tool and text byte counts from a single session's JSONL content.
+fn accumulate_breakdown(content: &str, bd: &mut SessionTokenBreakdown) {
+    // Map tool_use id → tool name for attributing tool_results
+    let mut pending_ids: HashMap<String, String> = HashMap::new();
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Skip non-message lines (progress, snapshots, system, etc.)
+        let msg = match parsed.get("message") {
+            Some(m) if !m.is_null() => m,
+            _ => continue,
+        };
+
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+
+        let content_val = match msg.get("content") {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // Handle string content (some user messages use plain string)
+        if let Some(s) = content_val.as_str() {
+            bd.user_text_bytes += s.len() as u64;
+            continue;
+        }
+
+        let blocks = match content_val.as_array() {
+            Some(arr) => arr,
+            None => continue,
+        };
+
+        for block in blocks {
+            let btype = match block.get("type").and_then(|t| t.as_str()) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            match btype {
+                "text" => {
+                    let len = block
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.len() as u64)
+                        .unwrap_or(0);
+                    if role == "assistant" {
+                        bd.assistant_text_bytes += len;
+                    } else {
+                        bd.user_text_bytes += len;
+                    }
+                }
+                "thinking" => {
+                    let len = block
+                        .get("thinking")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.len() as u64)
+                        .unwrap_or(0);
+                    bd.thinking_bytes += len;
+                }
+                "tool_use" => {
+                    let tool_name = match block.get("name").and_then(|n| n.as_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    // Count input bytes (the full serialized input object)
+                    let input_len = block
+                        .get("input")
+                        .map(|i| serde_json::to_string(i).unwrap_or_default().len() as u64)
+                        .unwrap_or(0);
+
+                    let entry = bd.tools.entry(tool_name.clone()).or_default();
+                    entry.input_bytes += input_len;
+                    entry.invocations += 1;
+
+                    if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
+                        pending_ids.insert(id.to_string(), tool_name);
+                    }
+                }
+                "tool_result" => {
+                    let tool_name = block
+                        .get("tool_use_id")
+                        .and_then(|i| i.as_str())
+                        .and_then(|id| pending_ids.remove(id));
+
+                    let output_len = content_block_text_len(block);
+
+                    if let Some(name) = tool_name {
+                        let entry = bd.tools.entry(name).or_default();
+                        entry.output_bytes += output_len;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Extract the text length from a tool_result content field.
+/// Handles both string and array-of-text-blocks formats.
+fn content_block_text_len(block: &serde_json::Value) -> u64 {
+    match block.get("content") {
+        Some(c) if c.is_string() => c.as_str().unwrap_or("").len() as u64,
+        Some(c) if c.is_array() => c
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+            .map(|t| t.len() as u64)
+            .sum(),
+        _ => 0,
+    }
+}
+
 /// Extract tool use events from JSONL content.
 ///
 /// Merges consecutive tool_use + tool_result pairs into single events

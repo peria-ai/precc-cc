@@ -11,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use precc_core::{
     advisor, consent, db, gdb, license, metrics, mining, promote, rtk, sharing, skills, telemetry,
+    update_check,
 };
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
@@ -87,6 +88,9 @@ enum Commands {
         /// Install a specific version (e.g. v0.2.0) instead of latest
         #[arg(long)]
         version: Option<String>,
+        /// Enable silent auto-update via the background miner daemon
+        #[arg(long)]
+        auto: bool,
     },
     /// Print a cache_control systemPrompt block for Anthropic API users (prompt caching)
     CacheHint,
@@ -138,6 +142,19 @@ enum LicenseAction {
     Deactivate,
     /// Show this machine's fingerprint (for generating machine-bound keys)
     Fingerprint,
+    /// Generate a license key (hidden, restricted to authorized machines)
+    #[command(hide = true)]
+    Generate {
+        /// Edition: pro, team, or enterprise
+        #[arg(long, default_value = "pro")]
+        edition: String,
+        /// Machine fingerprint (hex, e.g. f29c7d98). Omit for unbound key.
+        #[arg(long)]
+        fingerprint: Option<String>,
+        /// Expiry in days from now. 0 = never expires.
+        #[arg(long, default_value = "0")]
+        expiry_days: u32,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -179,6 +196,11 @@ enum TelemetryAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Show update banner on any command (except update itself, which handles it)
+    if !matches!(cli.command, Some(Commands::Update { .. })) {
+        show_update_banner();
+    }
+
     match cli.command {
         Some(Commands::Init) => cmd_init(),
         Some(Commands::Ingest { file, all, force }) => cmd_ingest(file, all, force),
@@ -211,7 +233,11 @@ fn main() -> Result<()> {
         }
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
-        Some(Commands::Update { force, version }) => cmd_update(force, version),
+        Some(Commands::Update {
+            force,
+            version,
+            auto,
+        }) => cmd_update(force, version, auto),
         Some(Commands::CacheHint) => cmd_cache_hint(),
         Some(Commands::Telemetry { action }) => cmd_telemetry(action),
         None => {
@@ -1617,6 +1643,9 @@ fn cmd_savings() -> Result<()> {
         0.0
     };
 
+    // ---- Token breakdown by tool type (from session log content) -----------
+    let breakdown = mining::session_token_breakdown().ok();
+
     println!("Summary");
     println!("-------");
     println!("  RTK baseline          : {:>8.0} tokens", rtk_tokens);
@@ -1626,6 +1655,172 @@ fn cmd_savings() -> Result<()> {
         println!("  PRECC share of savings: {:>7.1}%", precc_pct);
     }
     println!();
+
+    if let Some(ref bd) = breakdown {
+        let bash = bd.tool("Bash");
+        let bash_total = (bash.input_bytes + bash.output_bytes) as f64 / 4.0;
+        let api_tokens = bd.api_relevant_bytes() as f64 / 4.0;
+
+        let bash_saving_ratio = if bash_total > 0.0 {
+            grand_total / bash_total * 100.0
+        } else {
+            0.0
+        };
+        let api_saving_ratio = if api_tokens > 0.0 {
+            grand_total / api_tokens * 100.0
+        } else {
+            0.0
+        };
+
+        println!("Saving Ratio (API-relevant tokens only)");
+        println!("---------------------------------------");
+        if api_tokens > 0.0 {
+            println!("  API-relevant tokens             : {:>10.0}", api_tokens);
+            println!("  Tokens saved                    : {:>10.0}", grand_total);
+            println!(
+                "  vs all API content              : {:>9.1}%",
+                api_saving_ratio
+            );
+        }
+        if bash_total > 0.0 {
+            println!(
+                "  vs Bash tool spend              : {:>9.1}%",
+                bash_saving_ratio
+            );
+        }
+        println!();
+
+        // ---- Per-tool token distribution table ------------------------------
+        println!("Token Distribution by Category (API-relevant)");
+        println!("----------------------------------------------");
+        println!(
+            "  {:<14} {:>8} {:>10} {:>10} {:>10}  {:>5}",
+            "Category", "Calls", "Input tok", "Output tok", "Total tok", "Share"
+        );
+        println!("  {}", "-".repeat(67));
+
+        // Collect and sort tools by total bytes descending
+        let mut tool_rows: Vec<(&str, &mining::ToolBytes)> =
+            bd.tools.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        tool_rows.sort_by(|a, b| {
+            (b.1.input_bytes + b.1.output_bytes).cmp(&(a.1.input_bytes + a.1.output_bytes))
+        });
+
+        for (name, tb) in &tool_rows {
+            let input_tok = tb.input_bytes as f64 / 4.0;
+            let output_tok = tb.output_bytes as f64 / 4.0;
+            let total_tok = input_tok + output_tok;
+            let pct = if api_tokens > 0.0 {
+                total_tok / api_tokens * 100.0
+            } else {
+                0.0
+            };
+            let optimized = match *name {
+                "Bash" | "Read" | "Grep" | "Agent" => " ✓",
+                _ => "",
+            };
+            println!(
+                "  {:<14} {:>8} {:>10.0} {:>10.0} {:>10.0}  {:>4.1}%{}",
+                name, tb.invocations, input_tok, output_tok, total_tok, pct, optimized
+            );
+        }
+
+        // Thinking, assistant text, user text
+        let think_tok = bd.thinking_bytes as f64 / 4.0;
+        let asst_tok = bd.assistant_text_bytes as f64 / 4.0;
+        let user_tok = bd.user_text_bytes as f64 / 4.0;
+        let pct = |v: f64| -> f64 {
+            if api_tokens > 0.0 {
+                v / api_tokens * 100.0
+            } else {
+                0.0
+            }
+        };
+        println!("  {}", "-".repeat(67));
+        println!(
+            "  {:<14} {:>8} {:>10} {:>10.0} {:>10.0}  {:>4.1}%",
+            "Thinking",
+            "",
+            "",
+            think_tok,
+            think_tok,
+            pct(think_tok)
+        );
+        println!(
+            "  {:<14} {:>8} {:>10} {:>10.0} {:>10.0}  {:>4.1}%",
+            "Asst. text",
+            "",
+            "",
+            asst_tok,
+            asst_tok,
+            pct(asst_tok)
+        );
+        println!(
+            "  {:<14} {:>8} {:>10} {:>10.0} {:>10.0}  {:>4.1}%",
+            "User text",
+            "",
+            "",
+            user_tok,
+            user_tok,
+            pct(user_tok)
+        );
+        println!("  {}", "-".repeat(67));
+        println!(
+            "  {:<14} {:>8} {:>10} {:>10} {:>10.0}  100.0%",
+            "API TOTAL", "", "", "", api_tokens
+        );
+        println!();
+    }
+
+    // ---- Per-tool optimization rates (from metrics.log) --------------------
+    if let Ok(conn) = db::open_metrics(&data_dir) {
+        let read_filter_count: i64 =
+            metrics::summary(&conn, metrics::MetricType::Custom("read_filter"))
+                .ok()
+                .flatten()
+                .map(|s| s.count as i64)
+                .unwrap_or(0);
+        let grep_filter_count: i64 =
+            metrics::summary(&conn, metrics::MetricType::Custom("grep_filter"))
+                .ok()
+                .flatten()
+                .map(|s| s.count as i64)
+                .unwrap_or(0);
+        let agent_propagate_count: i64 =
+            metrics::summary(&conn, metrics::MetricType::Custom("agent_propagate"))
+                .ok()
+                .flatten()
+                .map(|s| s.count as i64)
+                .unwrap_or(0);
+
+        if read_filter_count > 0 || grep_filter_count > 0 || agent_propagate_count > 0 {
+            println!("Token Optimization by Tool");
+            println!("--------------------------");
+            println!(
+                "  Bash   : optimized (RTK rewrite + skills) [{} rewrites]",
+                rtk_rewrite_count
+            );
+            if read_filter_count > 0 {
+                println!(
+                    "  Read   : optimized (binary block + limit inject) [{} interventions]",
+                    read_filter_count
+                );
+            }
+            if grep_filter_count > 0 {
+                println!(
+                    "  Grep   : optimized (head_limit + type filter) [{} interventions]",
+                    grep_filter_count
+                );
+            }
+            if agent_propagate_count > 0 {
+                println!(
+                    "  Agent  : propagated to {} subagents",
+                    agent_propagate_count
+                );
+            }
+            println!();
+        }
+    }
 
     // ---- Per-skill ablation (PRECC-over-RTK only) -------------------------
     if let Ok(heuristics_conn) = db::open_heuristics(&data_dir) {
@@ -1729,6 +1924,65 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
                 fp[0], fp[1], fp[2], fp[3]
             );
             println!("(Provide this to generate a machine-bound license key)");
+            Ok(())
+        }
+        LicenseAction::Generate {
+            edition,
+            fingerprint,
+            expiry_days,
+        } => {
+            // Restricted: only the build machine can generate keys
+            const AUTHORIZED_FP: [u8; 4] = [0xF2, 0x9C, 0x7D, 0x98];
+            let local_fp = license::machine_fingerprint();
+            if local_fp != AUTHORIZED_FP {
+                bail!(
+                    "Key generation is not available on this machine (fp={:02x}{:02x}{:02x}{:02x})",
+                    local_fp[0],
+                    local_fp[1],
+                    local_fp[2],
+                    local_fp[3]
+                );
+            }
+
+            let machine_tag = match &fingerprint {
+                Some(hex_str) => {
+                    if hex_str.len() != 8 {
+                        bail!("fingerprint must be exactly 8 hex chars (4 bytes)");
+                    }
+                    let parse_byte = |i: usize| -> Result<u8> {
+                        u8::from_str_radix(&hex_str[i..i + 2], 16)
+                            .context("invalid hex in fingerprint")
+                    };
+                    [
+                        parse_byte(0)?,
+                        parse_byte(2)?,
+                        parse_byte(4)?,
+                        parse_byte(6)?,
+                    ]
+                }
+                None => [0u8; 4], // unbound
+            };
+
+            let edition_flags: u32 = match edition.to_lowercase().as_str() {
+                "pro" => 1,
+                "team" => 3,       // pro + team
+                "enterprise" => 7, // pro + team + enterprise
+                other => bail!("unknown edition: {other} (use pro, team, or enterprise)"),
+            };
+
+            let expiry = if expiry_days > 0 {
+                let now_days = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    / 86400;
+                (now_days as u32) + expiry_days
+            } else {
+                0
+            };
+
+            let key = license::generate(machine_tag, expiry, edition_flags);
+            println!("{key}");
             Ok(())
         }
     }
@@ -1893,12 +2147,20 @@ fn urlencoding_simple(s: &str) -> String {
         .collect()
 }
 
-fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
+fn cmd_update(force: bool, requested_version: Option<String>, auto: bool) -> Result<()> {
     use std::io::Write;
     use std::process::Command;
 
     const REPO: &str = "yijunyu/precc-cc";
     const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+    // Handle --auto flag: persist auto-update preference and return
+    if auto {
+        update_check::set_auto_update(true)?;
+        println!("Auto-update enabled. The miner daemon will silently upgrade PRECC when new versions are released.");
+        println!("To disable: edit ~/.config/precc/config.toml and set [update] auto = false");
+        return Ok(());
+    }
 
     // ── 0. Fire anonymous update-check ping (non-blocking) ───────────────────
     fire_update_ping(CURRENT);
@@ -2051,7 +2313,28 @@ fn cmd_update(force: bool, requested_version: Option<String>) -> Result<()> {
     }
     println!();
     println!("PRECC updated to {tag_name}. Run `precc init` if schemas changed.");
+
+    // Clear the update-available marker so the banner stops showing
+    if let Ok(data_dir) = db::data_dir() {
+        update_check::clear_update_marker(&data_dir);
+    }
+
     Ok(())
+}
+
+// =============================================================================
+// Update banner
+// =============================================================================
+
+/// Show a yellow update-available banner on stderr if a newer version exists.
+fn show_update_banner() {
+    if let Ok(data_dir) = db::data_dir() {
+        if let Some(ver) = update_check::read_update_available(&data_dir) {
+            eprintln!(
+                "\x1b[33m[precc] Update available: v{ver} — run `precc update` to upgrade\x1b[0m"
+            );
+        }
+    }
 }
 
 // =============================================================================

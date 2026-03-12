@@ -1,18 +1,16 @@
-//! precc-hook: Claude Code PreToolUse:Bash hook binary.
+//! precc-hook: Claude Code PreToolUse hook binary.
 //!
-//! Reads JSON from stdin (Claude Code hook event), processes through the
-//! PRECC pipeline, and emits modified JSON to stdout.
+//! Reads JSON from stdin (Claude Code hook event), dispatches by tool type,
+//! and emits modified JSON to stdout.
 //!
-//! Pipeline stages:
-//! 1. Parse command JSON
-//! 2. Query heuristics.db for matching skills (Pillar 4) — read-only, skip if no DB
-//! 3. Resolve correct working directory (Pillar 1)
-//! 4. Check for GDB opportunities (Pillar 2) — currently a no-op (needs history.db query)
-//! 5. Apply RTK rewriting (existing)
-//! 6. Emit modified command JSON
+//! Supported tools:
+//! - **Bash**: Full pipeline (skills, context, GDB, RTK rewriting)
+//! - **Read**: Binary file blocking, smart limit injection, duplicate read warning
+//! - **Grep**: Auto head_limit, auto type filter, LSP hints
+//! - **Agent**: Subagent hook propagation (inject PRECC hooks into prompt)
 //!
 //! Safety: On any error, exit 0 (allow command unchanged). Never block Claude.
-//! Latency target: < 5ms p99.
+//! Latency target: < 5ms p99 (Bash), < 3ms p99 (Read/Grep/Agent).
 //!
 //! Performance notes:
 //! - No subprocess spawns (gdb/rtk checks use PATH scanning)
@@ -22,7 +20,9 @@
 //! - Heuristics DB opened read-only, skipped if file doesn't exist
 //! - Schema init skipped (precc init handles it)
 
-use precc_core::{context, db, license, rtk, skills};
+use precc_core::{
+    agent_propagate, context, db, grep_filter, license, read_filter, rtk, skills, update_check,
+};
 use serde_json::Value;
 use std::io::{Read, Write};
 
@@ -47,13 +47,38 @@ fn run() -> anyhow::Result<()> {
     std::io::stdin().read_to_string(&mut input)?;
 
     let hook_input: Value = serde_json::from_str(&input)?;
-    let command = match hook_input
+
+    let tool_name = hook_input
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Bash");
+
+    let tool_input = hook_input
         .get("tool_input")
-        .and_then(|ti| ti.get("command"))
-        .and_then(|c| c.as_str())
-    {
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
+
+    match tool_name {
+        "Bash" => run_bash_pipeline(&hook_input, &tool_input, t_start),
+        "Read" => run_read_filter(&tool_input, t_start),
+        "Grep" => run_grep_filter(&tool_input, t_start),
+        "Agent" => run_agent_propagate(&tool_input, t_start),
+        _ => Ok(()), // Unknown tool — approve unchanged
+    }
+}
+
+// =============================================================================
+// Bash pipeline (existing behavior, refactored into its own function)
+// =============================================================================
+
+fn run_bash_pipeline(
+    hook_input: &Value,
+    tool_input: &Value,
+    t_start: std::time::Instant,
+) -> anyhow::Result<()> {
+    let command = match tool_input.get("command").and_then(|c| c.as_str()) {
         Some(cmd) => cmd.to_string(),
-        None => return Ok(()), // No command, exit 0
+        None => return Ok(()),
     };
 
     if command.is_empty() {
@@ -64,24 +89,192 @@ fn run() -> anyhow::Result<()> {
     let mut pipeline = Pipeline::new(command);
     pipeline.run();
 
-    // Stage 6: Emit result
     // Emit when command was rewritten OR when there's a GDB suggestion to surface.
     if pipeline.modified() || pipeline.had_gdb_suggestion {
-        let tool_input = hook_input
+        let ti = hook_input
             .get("tool_input")
             .cloned()
             .unwrap_or(Value::Object(serde_json::Map::new()));
 
-        emit_rewrite(&tool_input, &pipeline.command, &pipeline.reason())?;
+        emit_rewrite(&ti, &pipeline.command, &pipeline.reason())?;
     }
-    // If not modified and no suggestions, exit 0 (approve unchanged)
 
     // Record metrics (after stdout emit — never delays response to Claude)
     let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
-    append_metrics_log(&pipeline, latency_ms);
+    append_metrics_log_bash(&pipeline, latency_ms);
+
+    // Surface update notification on stderr (never delays stdout response)
+    if let Ok(data_dir) = db::data_dir() {
+        if let Some(ver) = update_check::read_update_available(&data_dir) {
+            eprintln!("[precc] Update available: v{ver} — run `precc update`");
+        }
+    }
 
     Ok(())
 }
+
+// =============================================================================
+// Read filter
+// =============================================================================
+
+fn run_read_filter(tool_input: &Value, t_start: std::time::Instant) -> anyhow::Result<()> {
+    let file_path = match tool_input.get("file_path").and_then(|v| v.as_str()) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    // Check 1: Block binary files
+    if read_filter::is_binary_extension(file_path) {
+        let ext = std::path::Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("binary");
+        let reason = format!(
+            "PRECC: blocked binary file (.{}) — use a dedicated tool for this file type",
+            ext
+        );
+        emit_deny(&reason)?;
+        append_metrics_log_tool("read_filter", t_start);
+        return Ok(());
+    }
+
+    // Check 2: Smart limit injection for large files
+    let current_limit = tool_input.get("limit").and_then(|v| v.as_u64());
+    let mut modified = false;
+    let mut updated_input = tool_input.clone();
+
+    if let Some(suggested_limit) = read_filter::suggest_limit(file_path, current_limit) {
+        if let Some(obj) = updated_input.as_object_mut() {
+            obj.insert("limit".to_string(), Value::Number(suggested_limit.into()));
+            modified = true;
+        }
+    }
+
+    // Check 3: Duplicate read warning (advisory only, on stderr)
+    if let Ok(data_dir) = db::data_dir() {
+        let offset = tool_input.get("offset").and_then(|v| v.as_u64());
+        let limit = tool_input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .or(current_limit);
+        if read_filter::check_recent_read(&data_dir, file_path, offset, limit) {
+            eprintln!(
+                "[precc] Note: {} was read recently — consider reusing prior content",
+                file_path
+            );
+        }
+    }
+
+    if modified {
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "PRECC: read-filter (limit injection)",
+                "updatedInput": updated_input
+            }
+        });
+        println!("{}", serde_json::to_string(&output)?);
+        append_metrics_log_tool("read_filter", t_start);
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Grep filter
+// =============================================================================
+
+fn run_grep_filter(tool_input: &Value, t_start: std::time::Instant) -> anyhow::Result<()> {
+    let mut updated_input = tool_input.clone();
+    let mut modified = false;
+    let mut reasons = Vec::new();
+
+    // Check 1: Auto head_limit
+    if let Some(limit) = grep_filter::suggest_head_limit(tool_input) {
+        if let Some(obj) = updated_input.as_object_mut() {
+            obj.insert("head_limit".to_string(), Value::Number(limit.into()));
+            modified = true;
+            reasons.push("head_limit injection");
+        }
+    }
+
+    // Check 2: Auto type filter
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if let Some(file_type) = grep_filter::suggest_type_filter(tool_input, &cwd) {
+        if let Some(obj) = updated_input.as_object_mut() {
+            obj.insert("type".to_string(), Value::String(file_type.to_string()));
+            modified = true;
+            reasons.push("auto type filter");
+        }
+    }
+
+    // Check 3: LSP hint (advisory only, on stderr)
+    if let Some(pattern) = tool_input.get("pattern").and_then(|v| v.as_str()) {
+        if grep_filter::is_symbol_lookup(pattern) {
+            eprintln!(
+                "[precc] Hint: consider using Go to Definition (LSP) instead of Grep for symbol lookups"
+            );
+        }
+    }
+
+    if modified {
+        let reason = format!("PRECC: grep-filter ({})", reasons.join(", "));
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": reason,
+                "updatedInput": updated_input
+            }
+        });
+        println!("{}", serde_json::to_string(&output)?);
+        append_metrics_log_tool("grep_filter", t_start);
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Agent propagation
+// =============================================================================
+
+fn run_agent_propagate(tool_input: &Value, t_start: std::time::Instant) -> anyhow::Result<()> {
+    let prompt = match tool_input.get("prompt").and_then(|v| v.as_str()) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    // Skip if hooks are already present
+    if agent_propagate::has_hooks_frontmatter(prompt) {
+        return Ok(());
+    }
+
+    let new_prompt = agent_propagate::inject_hooks_frontmatter(prompt);
+    let mut updated_input = tool_input.clone();
+    if let Some(obj) = updated_input.as_object_mut() {
+        obj.insert("prompt".to_string(), Value::String(new_prompt));
+    }
+
+    let output = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "PRECC: agent-propagate (subagent hook injection)",
+            "updatedInput": updated_input
+        }
+    });
+    println!("{}", serde_json::to_string(&output)?);
+    append_metrics_log_tool("agent_propagate", t_start);
+
+    Ok(())
+}
+
+// =============================================================================
+// Bash Pipeline (struct + stages)
+// =============================================================================
 
 struct Pipeline {
     original: String,
@@ -337,6 +530,10 @@ impl Pipeline {
     }
 }
 
+// =============================================================================
+// Shared helpers
+// =============================================================================
+
 /// Append a skill activation record to the activations log.
 ///
 /// Uses O_APPEND semantics (single write syscall) for atomicity.
@@ -362,12 +559,12 @@ fn append_activation_log(skill_id: i64, skill_name: &str, conf: f64) {
     }
 }
 
-/// Append hook metrics to metrics.log for async import by precc-miner.
+/// Append Bash hook metrics to metrics.log for async import by precc-miner.
 ///
 /// Records: hook_latency, cd_prepend (if fired), rtk_rewrite (if fired).
 /// Uses O_APPEND semantics — single write() syscall per entry, atomic.
 /// Fail-open: any error is silently ignored.
-fn append_metrics_log(pipeline: &Pipeline, latency_ms: f64) {
+fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -408,6 +605,47 @@ fn append_metrics_log(pipeline: &Pipeline, latency_ms: f64) {
         .append(true)
         .open(&log_path)
         .and_then(|mut f| f.write_all(lines.as_bytes()));
+}
+
+/// Append a tool-specific metric event to metrics.log.
+fn append_metrics_log_tool(tool_type: &str, t_start: std::time::Instant) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let log_path = std::path::Path::new(&home).join(".local/share/precc/metrics.log");
+
+    let lines = format!(
+        "{{\"ts\":{},\"type\":\"hook_latency_{}\",\"value\":{:.3}}}\n\
+         {{\"ts\":{},\"type\":\"{}\",\"value\":1.0}}\n",
+        ts, tool_type, latency_ms, ts, tool_type
+    );
+
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| f.write_all(lines.as_bytes()));
+}
+
+/// Emit a deny decision to stdout.
+fn emit_deny(reason: &str) -> anyhow::Result<()> {
+    let output = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason
+        }
+    });
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
 }
 
 /// Split a command into its `cd /path &&` prefix (if any) and the remaining command.

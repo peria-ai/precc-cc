@@ -7,17 +7,19 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Metric types recorded by the hook.
-pub enum MetricType {
+pub enum MetricType<'a> {
     HookLatency,
     SkillActivation,
     CdPrepend,
     GdbSuggestion,
     RtkRewrite,
     MinerTick,
+    /// Custom metric type for tool-specific filters (read_filter, grep_filter, etc.)
+    Custom(&'a str),
 }
 
-impl MetricType {
-    fn as_str(&self) -> &'static str {
+impl MetricType<'_> {
+    pub fn as_str(&self) -> &str {
         match self {
             MetricType::HookLatency => "hook_latency",
             MetricType::SkillActivation => "skill_activation",
@@ -25,6 +27,7 @@ impl MetricType {
             MetricType::GdbSuggestion => "gdb_suggestion",
             MetricType::RtkRewrite => "rtk_rewrite",
             MetricType::MinerTick => "miner_tick",
+            MetricType::Custom(s) => s,
         }
     }
 }

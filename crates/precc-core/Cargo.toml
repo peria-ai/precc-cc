@@ -17,6 +17,7 @@ hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
 obfstr.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"

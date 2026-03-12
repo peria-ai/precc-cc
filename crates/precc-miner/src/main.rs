@@ -11,7 +11,7 @@
 //! - `precc-miner --foreground` — don't write PID file, log to stderr
 
 use anyhow::{Context, Result};
-use precc_core::{db, mining, promote, skills};
+use precc_core::{db, mining, promote, skills, update_check};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -159,6 +159,17 @@ fn run_once() -> Result<()> {
     // Refresh prefix cache so the hook skips DB open for non-matching commands
     if let Err(e) = skills::write_skill_prefixes(&heuristics_conn, &data_dir) {
         log(&format!("prefixes: failed to write cache: {e}"));
+    }
+
+    // Check for updates (rate-limited to once per 24h)
+    if let Ok(Some(ver)) = update_check::check_latest_version(&data_dir) {
+        log(&format!("update: v{ver} available"));
+        if update_check::auto_update_enabled() {
+            match update_check::perform_auto_update(&data_dir, &ver) {
+                Ok(()) => log("update: auto-updated successfully"),
+                Err(e) => log(&format!("update: auto-update failed: {e:#}")),
+            }
+        }
     }
 
     log("precc-miner: single pass complete");
@@ -313,6 +324,17 @@ fn tick(data_dir: &std::path::Path) -> Result<()> {
     // Refresh prefix cache so the hook skips DB open for non-matching commands
     if let Err(e) = skills::write_skill_prefixes(&heuristics_conn, data_dir) {
         log(&format!("prefixes: failed to write cache: {e}"));
+    }
+
+    // Check for updates (rate-limited to once per 24h)
+    if let Ok(Some(ver)) = update_check::check_latest_version(data_dir) {
+        log(&format!("update: v{ver} available"));
+        if update_check::auto_update_enabled() {
+            match update_check::perform_auto_update(data_dir, &ver) {
+                Ok(()) => log("update: auto-updated successfully"),
+                Err(e) => log(&format!("update: auto-update failed: {e:#}")),
+            }
+        }
     }
 
     Ok(())

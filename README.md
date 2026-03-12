@@ -21,12 +21,15 @@ Also available via [OpenClaw](https://clawhub.ai/skills/precc-token-saver) (`cla
 
 ## How It Works
 
-Once installed, PRECC intercepts every bash command Claude Code runs through a <3ms hook. No configuration needed.
+Once installed, PRECC intercepts every tool call Claude Code makes through a <3ms hook. No configuration needed.
 
 - **Fixes wrong-directory commands** — auto-prepends `cd /correct/path &&` when cargo, npm, go, python, git, or make runs outside its project root
 - **Prevents repeated failures** — learns from past sessions and auto-corrects commands that would fail the same way
 - **Compresses output** — rewrites commands via [RTK](https://github.com/rtk-ai/rtk) for 60-90% smaller output
 - **Optimizes Rust workflows** — caches `cargo doc`, substitutes `cargo check` for `cargo build`, and slices test output to show only failures
+- **Filters Read calls** — blocks binary file reads, injects smart limits on large files, warns on duplicate reads
+- **Optimizes Grep calls** — auto-injects `head_limit` to prevent output floods, adds project-aware type filters, hints at LSP for symbol lookups
+- **Propagates to subagents** — injects PRECC hooks into Agent tool calls so every subagent inherits the same optimizations
 
 ## Usage
 
@@ -114,6 +117,14 @@ MIT
 
 <details>
 <summary>Changelog</summary>
+
+### v0.2.0
+
+- Multi-tool hook dispatch: PRECC now intercepts Read, Grep, and Agent tools in addition to Bash
+- Read filter: blocks binary file reads (.png, .wasm, .so, etc.), injects smart limits on large files, warns on duplicate reads
+- Grep filter: auto `head_limit` for content mode, project-aware type filter (Rust/Go/Python/TS), LSP hint for symbol lookups
+- Subagent hook propagation: injects PRECC hooks into Agent tool prompts so subagents inherit all optimizations
+- Per-tool optimization metrics in `precc savings` report
 
 ### v0.1.9
 

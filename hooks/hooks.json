@@ -10,6 +10,36 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "precc-hook",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "precc-hook",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "precc-hook",
+            "timeout": 3
+          }
+        ]
       }
     ]
   }
