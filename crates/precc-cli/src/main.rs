@@ -1935,10 +1935,16 @@ fn cmd_savings() -> Result<()> {
 fn cmd_license(action: LicenseAction) -> Result<()> {
     match action {
         LicenseAction::Activate { key, email } => {
-            let lic = if let Some(ref email) = email {
-                license::activate_with_email(&key, email)?
+            let lic = if key.starts_with("PRECC-") {
+                // PRECC native key
+                if let Some(ref email) = email {
+                    license::activate_with_email(&key, email)?
+                } else {
+                    license::activate(&key)?
+                }
             } else {
-                license::activate(&key)?
+                // Gumroad key — verify online
+                license::activate_gumroad(&key)?
             };
             println!("License activated successfully.");
             println!("  Edition:        {}", lic.edition_name());

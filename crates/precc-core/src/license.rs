@@ -132,8 +132,8 @@ pub fn tier() -> Tier {
 pub fn require_paid(feature: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{feature} requires a PRECC Pro (or higher) license.\n\
-         Activate:  precc license activate <key>\n\
-         Get a key: https://github.com/yijunyu/precc-cc#pricing"
+         Activate:  precc license activate <gumroad-key>\n\
+         Buy a key: https://github.com/yijunyu/precc-cc#pricing"
     )
 }
 
@@ -232,6 +232,17 @@ pub fn load() -> Result<Option<License>> {
     };
     let email = lines.next().map(|e| e.trim()).filter(|e| !e.is_empty());
 
+    // Gumroad keys: stored as "GR:<key>" — trusted after first online verification
+    if is_gumroad_key(key) {
+        return Ok(Some(License {
+            machine_tag: [0; 4],
+            expiry_days: 0,
+            edition_flags: 1, // Pro
+            machine_bound: false,
+        }));
+    }
+
+    // PRECC native keys
     let lic = parse(key)?;
     if lic.is_expired() {
         bail!("License key has expired");
@@ -254,6 +265,85 @@ pub fn load() -> Result<Option<License>> {
     }
 
     Ok(Some(lic))
+}
+
+// =============================================================================
+// Gumroad license verification
+// =============================================================================
+
+/// The Gumroad product ID for PRECC Pro.
+/// Set via PRECC_GUMROAD_PRODUCT_ID env at build time, or empty for open builds.
+const GUMROAD_PRODUCT_ID: &str = match option_env!("PRECC_GUMROAD_PRODUCT_ID") {
+    Some(s) => s,
+    None => "",
+};
+
+/// Verify a Gumroad license key online and activate if valid.
+///
+/// Calls `https://api.gumroad.com/v2/licenses/verify` to check the key.
+/// On success, stores the Gumroad key locally so subsequent loads don't
+/// need network access (offline-friendly after first activation).
+pub fn activate_gumroad(key: &str) -> Result<License> {
+    let key = key.trim();
+
+    if GUMROAD_PRODUCT_ID.is_empty() {
+        bail!("Gumroad product ID not configured in this build");
+    }
+
+    // Call Gumroad license verification API
+    let resp = ureq::post("https://api.gumroad.com/v2/licenses/verify")
+        .send_form(&[
+            ("product_id", GUMROAD_PRODUCT_ID),
+            ("license_key", key),
+            ("increment_uses_count", "true"),
+        ])
+        .map_err(|e| anyhow::anyhow!("Gumroad verification failed: {e}"))?;
+
+    let body: serde_json::Value = resp
+        .into_json()
+        .map_err(|e| anyhow::anyhow!("Failed to parse Gumroad response: {e}"))?;
+
+    let success = body["success"].as_bool().unwrap_or(false);
+    if !success {
+        let msg = body["message"]
+            .as_str()
+            .unwrap_or("Unknown error from Gumroad");
+        bail!("Gumroad license verification failed: {msg}");
+    }
+
+    // Check for refund/dispute/chargeback
+    let purchase = &body["purchase"];
+    if purchase["refunded"].as_bool().unwrap_or(false)
+        || purchase["disputed"].as_bool().unwrap_or(false)
+        || purchase["chargebacked"].as_bool().unwrap_or(false)
+    {
+        bail!("This license has been refunded or disputed");
+    }
+
+    // Valid! Store as a Gumroad key (prefix with "GR:" to distinguish from PRECC keys)
+    let email = purchase["email"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+
+    let path = license_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, format!("GR:{key}\n{email}\n"))?;
+
+    Ok(License {
+        machine_tag: [0; 4],
+        expiry_days: 0,
+        edition_flags: 1, // Pro
+        machine_bound: false,
+    })
+}
+
+/// Check if a stored key is a Gumroad key (prefixed with "GR:").
+fn is_gumroad_key(key: &str) -> bool {
+    key.starts_with("GR:")
 }
 
 /// Deactivate: remove the stored license key.

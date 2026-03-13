@@ -1,7 +1,0 @@
-name = "precc-gumroad-webhook"
-main = "worker.js"
-compatibility_date = "2024-01-01"
-
-# Secrets (set via `wrangler secret put`):
-#   LICENSE_SECRET  — same value as PRECC_LICENSE_SECRET used in Rust build
-#   GUMROAD_SELLER_ID — your Gumroad seller ID (for webhook verification)
