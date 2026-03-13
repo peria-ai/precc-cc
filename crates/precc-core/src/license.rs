@@ -212,6 +212,10 @@ pub fn activate(key: &str) -> Result<License> {
 
 /// Read the stored license key and validate it.
 /// Returns `Ok(None)` if no license is stored (community/open mode).
+///
+/// Supports two formats:
+/// - Single line: `key` (machine-bound validation)
+/// - Two lines: `key\nemail` (email-bound validation)
 pub fn load() -> Result<Option<License>> {
     let path = match license_path() {
         Ok(p) => p,
@@ -221,11 +225,34 @@ pub fn load() -> Result<Option<License>> {
         return Ok(None);
     }
     let raw = std::fs::read_to_string(&path)?;
-    let key = raw.trim();
-    if key.is_empty() {
-        return Ok(None);
+    let mut lines = raw.lines();
+    let key = match lines.next() {
+        Some(k) if !k.trim().is_empty() => k.trim(),
+        _ => return Ok(None),
+    };
+    let email = lines.next().map(|e| e.trim()).filter(|e| !e.is_empty());
+
+    let lic = parse(key)?;
+    if lic.is_expired() {
+        bail!("License key has expired");
     }
-    let lic = validate(key)?;
+
+    if lic.machine_bound {
+        if let Some(email) = email {
+            // Email-based: check email fingerprint
+            let expected = email_fingerprint(email);
+            if lic.machine_tag != expected {
+                bail!("License key does not match stored email");
+            }
+        } else {
+            // Machine-based: check machine fingerprint
+            let fp = machine_fingerprint();
+            if lic.machine_tag != fp {
+                bail!("License key is bound to a different machine");
+            }
+        }
+    }
+
     Ok(Some(lic))
 }
 
@@ -263,6 +290,43 @@ pub fn generate(machine_tag: [u8; 4], expiry_days: u32, edition_flags: u32) -> S
         &hex[16..24],
         &hex[24..32]
     )
+}
+
+/// Compute the 4-byte fingerprint from an email address.
+pub fn email_fingerprint(email: &str) -> [u8; 4] {
+    use sha2::Digest;
+    let normalized = email.trim().to_lowercase();
+    let hash = sha2::Sha256::digest(normalized.as_bytes());
+    [hash[0], hash[1], hash[2], hash[3]]
+}
+
+/// Generate a license key bound to an email address.
+pub fn generate_for_email(email: &str, expiry_days: u32, edition_flags: u32) -> String {
+    let tag = email_fingerprint(email);
+    generate(tag, expiry_days, edition_flags)
+}
+
+/// Activate a license key using email-based binding.
+/// Validates the key's MAC and checks that the machine_tag matches SHA256(email).
+/// Stores both key and email in the license file.
+pub fn activate_with_email(key: &str, email: &str) -> Result<License> {
+    let lic = parse(key)?;
+    if lic.is_expired() {
+        bail!("License key has expired");
+    }
+    let expected_tag = email_fingerprint(email);
+    if lic.machine_tag != expected_tag {
+        bail!("License key does not match this email address");
+    }
+    let path = license_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        &path,
+        format!("{}\n{}\n", key.trim(), email.trim().to_lowercase()),
+    )?;
+    Ok(lic)
 }
 
 /// Compute the 4-byte machine fingerprint from hostname + username.
@@ -350,6 +414,40 @@ mod tests {
         let result = validate(&key);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("expired"));
+    }
+
+    #[test]
+    fn email_fingerprint_deterministic() {
+        let fp1 = email_fingerprint("User@Example.COM");
+        let fp2 = email_fingerprint("user@example.com");
+        assert_eq!(fp1, fp2); // case-insensitive
+    }
+
+    #[test]
+    fn email_fingerprint_differs_for_different_emails() {
+        let fp1 = email_fingerprint("alice@example.com");
+        let fp2 = email_fingerprint("bob@example.com");
+        assert_ne!(fp1, fp2);
+    }
+
+    #[test]
+    fn generate_for_email_roundtrip() {
+        let email = "buyer@example.com";
+        let key = generate_for_email(email, 0, 1);
+        let lic = parse(&key).expect("parse should succeed");
+        assert!(lic.is_pro());
+        assert_eq!(lic.machine_tag, email_fingerprint(email));
+    }
+
+    #[test]
+    fn activate_with_email_wrong_email_fails() {
+        let key = generate_for_email("correct@example.com", 0, 1);
+        let result = activate_with_email(&key, "wrong@example.com");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not match this email"));
     }
 
     #[test]

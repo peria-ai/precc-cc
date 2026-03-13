@@ -135,6 +135,9 @@ enum LicenseAction {
     Activate {
         /// License key (format: PRECC-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX)
         key: String,
+        /// Email address used for purchase (for email-bound keys)
+        #[arg(long)]
+        email: Option<String>,
     },
     /// Show current license status
     Status,
@@ -151,6 +154,9 @@ enum LicenseAction {
         /// Machine fingerprint (hex, e.g. f29c7d98). Omit for unbound key.
         #[arg(long)]
         fingerprint: Option<String>,
+        /// Generate key bound to this email instead of machine
+        #[arg(long, conflicts_with = "fingerprint")]
+        email: Option<String>,
         /// Expiry in days from now. 0 = never expires.
         #[arg(long, default_value = "0")]
         expiry_days: u32,
@@ -1928,8 +1934,12 @@ fn cmd_savings() -> Result<()> {
 
 fn cmd_license(action: LicenseAction) -> Result<()> {
     match action {
-        LicenseAction::Activate { key } => {
-            let lic = license::activate(&key)?;
+        LicenseAction::Activate { key, email } => {
+            let lic = if let Some(ref email) = email {
+                license::activate_with_email(&key, email)?
+            } else {
+                license::activate(&key)?
+            };
             println!("License activated successfully.");
             println!("  Edition:        {}", lic.edition_name());
             println!(
@@ -1989,6 +1999,7 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
         LicenseAction::Generate {
             edition,
             fingerprint,
+            email,
             expiry_days,
         } => {
             // Restricted: only the build machine can generate keys
@@ -2004,23 +2015,27 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
                 );
             }
 
-            let machine_tag = match &fingerprint {
-                Some(hex_str) => {
-                    if hex_str.len() != 8 {
-                        bail!("fingerprint must be exactly 8 hex chars (4 bytes)");
+            let machine_tag = if let Some(ref email) = email {
+                license::email_fingerprint(email)
+            } else {
+                match &fingerprint {
+                    Some(hex_str) => {
+                        if hex_str.len() != 8 {
+                            bail!("fingerprint must be exactly 8 hex chars (4 bytes)");
+                        }
+                        let parse_byte = |i: usize| -> Result<u8> {
+                            u8::from_str_radix(&hex_str[i..i + 2], 16)
+                                .context("invalid hex in fingerprint")
+                        };
+                        [
+                            parse_byte(0)?,
+                            parse_byte(2)?,
+                            parse_byte(4)?,
+                            parse_byte(6)?,
+                        ]
                     }
-                    let parse_byte = |i: usize| -> Result<u8> {
-                        u8::from_str_radix(&hex_str[i..i + 2], 16)
-                            .context("invalid hex in fingerprint")
-                    };
-                    [
-                        parse_byte(0)?,
-                        parse_byte(2)?,
-                        parse_byte(4)?,
-                        parse_byte(6)?,
-                    ]
+                    None => [0u8; 4], // unbound
                 }
-                None => [0u8; 4], // unbound
             };
 
             let edition_flags: u32 = match edition.to_lowercase().as_str() {
