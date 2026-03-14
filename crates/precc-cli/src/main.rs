@@ -58,7 +58,11 @@ enum Commands {
     /// Analytics dashboard
     Report,
     /// Estimate token savings from PRECC over RTK alone
-    Savings,
+    Savings {
+        /// Show full detailed breakdown (Pro only)
+        #[arg(long)]
+        all: bool,
+    },
     /// Setup hook and databases
     Init,
     /// Convert a bash script to an animated GIF at a target duration
@@ -226,7 +230,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Report) => cmd_report(),
-        Some(Commands::Savings) => cmd_savings(),
+        Some(Commands::Savings { all }) => cmd_savings(all),
         Some(Commands::Gif {
             script,
             length,
@@ -1601,9 +1605,9 @@ fn rtk_weighted_avg_tokens() -> f64 {
     total as f64 / count
 }
 
-fn cmd_savings() -> Result<()> {
-    if license::tier() == license::Tier::Free {
-        return Err(license::require_paid("Savings estimation"));
+fn cmd_savings(all: bool) -> Result<()> {
+    if all && license::tier() == license::Tier::Free {
+        return Err(license::require_paid("Detailed savings breakdown (--all)"));
     }
     let data_dir = db::data_dir()?;
     let model = TokenModel::default();
@@ -1721,6 +1725,13 @@ fn cmd_savings() -> Result<()> {
         println!("  PRECC share of savings: {:>7.1}%", precc_pct);
     }
     println!();
+
+    if !all {
+        println!("Run `precc savings --all` for full per-tool and per-skill breakdown (Pro).");
+        println!();
+        println!("Note: figures are estimates based on conservative medians per event.");
+        return Ok(());
+    }
 
     if let Some(ref bd) = breakdown {
         let bash = bd.tool("Bash");
