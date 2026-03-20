@@ -1,6 +1,6 @@
 # PRECC — Predictive Error Correction for Claude Code
 
-PRECC saves **~34% of Claude Code costs** through three pillars: fixing bash commands before they fail, compressing tool output, and reducing context token usage via semantic search and file compression.
+PRECC saves **~34% of Claude Code costs** through three pillars: fixing bash commands before they fail, compressing tool output, and reducing context token usage via semantic search and file compression. Ships as a single Rust binary.
 
 ## Three Savings Pillars
 
@@ -12,12 +12,13 @@ PRECC saves **~34% of Claude Code costs** through three pillars: fixing bash com
 
 ### Pillar 2: Semantic Code Search (cocoindex-code)
 - Intercepts `grep`/`rg` and redirects through AST-aware semantic search
+- Built into the `precc-hook` binary; no extra scripts needed
 - Understands code structure across 28+ languages, saving ~70% of search tokens
 
-### Pillar 3: Context File Compression (token-saver)
-- Strips filler words from CLAUDE.md and memory files
+### Pillar 3: Context File Compression
+- Strips filler words from CLAUDE.md and memory files via `precc compress`
 - Reduces tokens loaded on every API call (~30% compression)
-- Backups saved automatically, revertible with `--revert`
+- Backups saved automatically, revertible with `precc compress --revert`
 
 ## Install
 
@@ -45,9 +46,9 @@ ccc init && ccc index
 ccc search "authentication middleware"
 
 # Compress context files
-node precc-ts-compress.js --dry-run   # preview
-node precc-ts-compress.js             # compress
-node precc-ts-compress.js --revert    # revert
+precc compress --dry-run   # preview
+precc compress             # compress
+precc compress --revert    # revert
 ```
 
 ## Measured Results

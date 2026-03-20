@@ -116,26 +116,15 @@ for bin in precc precc-hook precc-miner; do
     fi
 done
 
-# Install ccc hook and savings scripts
-SCRIPT_URL_BASE="https://raw.githubusercontent.com/${REPO}/main/scripts"
-for script in precc-ccc-hook.sh precc-ccc-savings.sh precc-ts-compress.js precc-ts-savings.sh; do
-    curl -fsSL "${SCRIPT_URL_BASE}/${script}" -o "${BIN_DIR}/${script}" 2>/dev/null \
-        && chmod +x "${BIN_DIR}/${script}" \
-        && echo "  Installed ${BIN_DIR}/${script}" \
-        || true
-done
-
 # ---------------------------------------------------------------------------
 # Wire ~/.claude/settings.json
 # ---------------------------------------------------------------------------
 HOOK_CMD="${BIN_DIR}/precc-hook"
 SETTINGS="${HOME}/.claude/settings.json"
 
-CCC_HOOK_CMD="${BIN_DIR}/precc-ccc-hook.sh"
-
 wire_hook() {
     if [[ ! -f "${SETTINGS}" ]]; then
-        # No settings file — create one with both hook entries
+        # No settings file — create one with the hook entry
         mkdir -p "$(dirname "${SETTINGS}")"
         cat > "${SETTINGS}" <<EOF
 {
@@ -147,10 +136,6 @@ wire_hook() {
           {
             "type": "command",
             "command": "${HOOK_CMD}"
-          },
-          {
-            "type": "command",
-            "command": "${CCC_HOOK_CMD}"
           }
         ]
       }
@@ -158,7 +143,7 @@ wire_hook() {
   }
 }
 EOF
-        echo "  Created ${SETTINGS} with precc-hook and precc-ccc-hook entries"
+        echo "  Created ${SETTINGS} with precc-hook entry"
     elif ! grep -q "precc-hook" "${SETTINGS}" 2>/dev/null; then
         # Settings file exists but no hook — print manual instructions
         echo ""
@@ -169,10 +154,7 @@ EOF
         echo '    "PreToolUse": ['
         echo '      {'
         echo '        "matcher": "Bash",'
-        echo '        "hooks": ['
-        echo '          {"type": "command", "command": "'"${HOOK_CMD}"'"},'
-        echo '          {"type": "command", "command": "'"${CCC_HOOK_CMD}"'"}'
-        echo '        ]'
+        echo '        "hooks": [{"type": "command", "command": "'"${HOOK_CMD}"'"}]'
         echo '      }'
         echo '    ]'
         echo '  }'

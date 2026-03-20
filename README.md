@@ -1,6 +1,6 @@
 # PRECC — Predictive Error Correction for Claude Code
 
-PRECC saves **~34% of Claude Code costs** through three pillars: fixing bash commands before they fail, compressing tool output, and reducing context token usage via semantic search and file compression.
+PRECC saves **~34% of Claude Code costs** through three pillars: fixing bash commands before they fail, compressing tool output, and reducing context token usage via semantic search and file compression. Ships as a single Rust binary.
 
 ## Install
 
@@ -50,7 +50,7 @@ clawhub install precc
 
 ### Pillar 2: Semantic Code Search ([cocoindex-code](https://github.com/cocoindex-io/cocoindex-code))
 
-PRECC's hook automatically intercepts recursive `grep` and `rg` commands. When a project has a cocoindex-code index, the hook redirects through AST-aware semantic search — saving ~70% of search output tokens.
+PRECC's hook automatically intercepts recursive `grep` and `rg` commands. When a project has a cocoindex-code index, the hook redirects through AST-aware semantic search — saving ~70% of search output tokens. Built into the `precc-hook` binary; no extra scripts needed.
 
 ```bash
 # Index your project (one-time)
@@ -61,21 +61,19 @@ ccc search "user session management"
 ccc search --lang python "error handling"
 ```
 
-**How it works:** The PreToolUse hook extracts the search pattern from grep/rg, runs `ccc search`, compares output sizes, and returns the smaller result. Savings are logged to `~/.precc/ccc-metrics.jsonl`.
+### Pillar 3: Context File Compression
 
-### Pillar 3: Context File Compression ([token-saver](https://clawhub.ai/skills/token-saver))
-
-Strips filler words and verbose phrasing from always-loaded context files (CLAUDE.md, memory files). Since these files are sent with every API call, even small reductions compound across a session.
+Strips filler words and verbose phrasing from always-loaded context files (CLAUDE.md, memory files). Since these files are sent with every API call, even small reductions compound across a session. Built into the `precc` binary.
 
 ```bash
 # Preview savings
-node precc-ts-compress.js --dry-run
+precc compress --dry-run
 
 # Compress (backups saved as *.backup)
-node precc-ts-compress.js
+precc compress
 
 # Revert to originals
-node precc-ts-compress.js --revert
+precc compress --revert
 ```
 
 ## Usage
@@ -117,7 +115,6 @@ $ precc init
 - Claude Code (with hooks support)
 - [RTK](https://github.com/rtk-ai/rtk) (optional, for output compression)
 - [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) (optional, for AST-driven semantic search)
-- Node.js (optional, for context file compression)
 
 ## Measured Results
 
