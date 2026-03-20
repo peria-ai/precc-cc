@@ -33,6 +33,21 @@
       "name": "savings",
       "description": "Show PRECC analytics report — hook latency, skill activations, failure patterns, and cost savings",
       "source": "./commands/savings.md"
+    },
+    {
+      "name": "search",
+      "description": "AST-driven semantic code search via cocoindex-code — find code by meaning, not just text",
+      "source": "./commands/search.md"
+    },
+    {
+      "name": "ccc-savings",
+      "description": "Show token savings from grep→ccc semantic search redirections",
+      "source": "./commands/ccc-savings.md"
+    },
+    {
+      "name": "compress",
+      "description": "Compress CLAUDE.md and context files to reduce token usage on every API call",
+      "source": "./commands/compress.md"
     }
   ]
 }

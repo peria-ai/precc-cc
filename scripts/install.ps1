@@ -164,8 +164,48 @@ try {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: install cocoindex-code (AST-driven semantic code search)
+# ---------------------------------------------------------------------------
+Write-Host ""
+$hasPipx = Get-Command "pipx" -ErrorAction SilentlyContinue
+$hasUv = Get-Command "uv" -ErrorAction SilentlyContinue
+$hasPip = Get-Command "pip3" -ErrorAction SilentlyContinue
+
+$cccInstalled = $false
+if ($hasPipx) {
+    Write-Host "Installing cocoindex-code via pipx..."
+    pipx install cocoindex-code 2>$null
+    if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pipx" }
+} elseif ($hasUv) {
+    Write-Host "Installing cocoindex-code via uv..."
+    uv tool install --upgrade cocoindex-code --prerelease explicit 2>$null
+    if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via uv" }
+} elseif ($hasPip) {
+    Write-Host "Installing cocoindex-code via pip3..."
+    pip3 install --user cocoindex-code 2>$null
+    if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pip3" }
+} else {
+    Write-Host "  Skipped cocoindex-code: install pipx, uv, or pip3 first, then run:"
+    Write-Host "    pipx install cocoindex-code"
+}
+
+if ($cccInstalled) {
+    $hasClaude = Get-Command "claude" -ErrorAction SilentlyContinue
+    if ($hasClaude) {
+        claude mcp add cocoindex-code -- ccc mcp 2>$null
+        Write-Host "  Configured cocoindex-code MCP server for Claude Code"
+    } else {
+        Write-Host "  To enable MCP integration, run:"
+        Write-Host "    claude mcp add cocoindex-code -- ccc mcp"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "PRECC $Version installed to $InstallDir."
 Write-Host "Run 'precc init' to initialize databases."
+if ($cccInstalled) {
+    Write-Host "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
+}
