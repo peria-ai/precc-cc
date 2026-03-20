@@ -34,6 +34,14 @@ const AUTO_APPLY_THRESHOLD: f64 = 0.7;
 const SUGGEST_THRESHOLD: f64 = 0.3;
 
 fn main() {
+    // Statusline mode: invoked by Claude Code's statusLine config
+    if std::env::args().any(|a| a == "--statusline") {
+        if run_statusline().is_err() {
+            // Fail silent — empty statusline on error
+        }
+        return;
+    }
+
     // Fail open: any panic or error => exit 0 (approve unchanged)
     if run().is_err() {
         std::process::exit(0);
@@ -78,6 +86,190 @@ fn run() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+// =============================================================================
+// Statusline mode — real-time PRECC metrics in Claude Code's status bar
+// =============================================================================
+
+/// Statusline session counters, parsed from metrics.log.
+/// Only counts events from the current session (since session_start timestamp).
+struct StatuslineCounts {
+    corrections: u64,
+    latency_sum: f64,
+    latency_count: u64,
+    tokens_saved: u64,
+    skills_fired: u64,
+    ccc_bytes_saved: u64,
+}
+
+impl StatuslineCounts {
+    fn avg_latency_ms(&self) -> f64 {
+        if self.latency_count == 0 {
+            0.0
+        } else {
+            self.latency_sum / self.latency_count as f64
+        }
+    }
+}
+
+/// Parse metrics.log for events since `since_ts` (unix seconds).
+fn parse_session_metrics(since_ts: u64) -> StatuslineCounts {
+    let mut counts = StatuslineCounts {
+        corrections: 0,
+        latency_sum: 0.0,
+        latency_count: 0,
+        tokens_saved: 0,
+        skills_fired: 0,
+        ccc_bytes_saved: 0,
+    };
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return counts,
+    };
+    let log_path = std::path::Path::new(&home).join(".local/share/precc/metrics.log");
+    let content = match std::fs::read_to_string(&log_path) {
+        Ok(c) => c,
+        Err(_) => return counts,
+    };
+
+    // Token savings estimates per event type (conservative)
+    const TOKENS_PER_CD: u64 = 300;
+    const TOKENS_PER_RTK: u64 = 175;
+    const TOKENS_PER_SKILL: u64 = 250;
+    const TOKENS_PER_CCC_BYTE: f64 = 0.25; // ~4 bytes per token
+
+    for line in content.lines().rev() {
+        let ts = match extract_ts(line) {
+            Some(t) => t,
+            None => continue,
+        };
+        if ts < since_ts {
+            break; // metrics.log is append-only, so once we're past the window, stop
+        }
+
+        let metric_type = match extract_str_field(line, "type") {
+            Some(t) => t,
+            None => continue,
+        };
+        let value = extract_f64_field(line, "value").unwrap_or(0.0);
+
+        match metric_type {
+            "hook_latency" => {
+                counts.latency_sum += value;
+                counts.latency_count += 1;
+            }
+            "cd_prepend" => {
+                counts.corrections += 1;
+                counts.tokens_saved += TOKENS_PER_CD;
+            }
+            "rtk_rewrite" => {
+                counts.corrections += 1;
+                counts.tokens_saved += TOKENS_PER_RTK;
+            }
+            "skill_activation" => {
+                counts.corrections += 1;
+                counts.skills_fired += 1;
+                counts.tokens_saved += TOKENS_PER_SKILL;
+            }
+            "ccc_redirect" => {
+                counts.corrections += 1;
+                counts.ccc_bytes_saved += value as u64;
+                counts.tokens_saved += (value * TOKENS_PER_CCC_BYTE) as u64;
+            }
+            "gdb_suggestion" => {
+                counts.corrections += 1;
+            }
+            _ => {}
+        }
+    }
+
+    counts
+}
+
+/// Fast inline extraction of "ts" integer field from a JSON line.
+fn extract_ts(line: &str) -> Option<u64> {
+    let start = line.find("\"ts\":")?;
+    let rest = &line[start + 5..];
+    let end = rest.find(|c: char| !c.is_ascii_digit())?;
+    rest[..end].parse().ok()
+}
+
+/// Fast inline extraction of a string field value from a JSON line.
+fn extract_str_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
+    let pattern = format!("\"{}\":\"", field);
+    let start = line.find(&pattern)? + pattern.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// Fast inline extraction of a float field value from a JSON line.
+fn extract_f64_field(line: &str, field: &str) -> Option<f64> {
+    let pattern = format!("\"{}\":", field);
+    let start = line.find(&pattern)? + pattern.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| c != '.' && c != '-' && !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// Format a token count for display (e.g., 1500 → "1.5K", 1500000 → "1.5M").
+fn fmt_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+fn run_statusline() -> anyhow::Result<()> {
+    // Read statusline JSON from stdin
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+    let stdin_json: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
+
+    // Determine session start: use cost.total_duration_ms to compute when the session began
+    let session_start_ts = {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let duration_ms = stdin_json
+            .pointer("/cost/total_duration_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        now.saturating_sub(duration_ms / 1000)
+    };
+
+    let counts = parse_session_metrics(session_start_ts);
+
+    // Build statusline output
+    let mut parts: Vec<String> = Vec::new();
+
+    if counts.corrections > 0 {
+        parts.push(format!(
+            "PRECC: {} fix{}, ~{} tokens saved",
+            counts.corrections,
+            if counts.corrections == 1 { "" } else { "es" },
+            fmt_tokens(counts.tokens_saved)
+        ));
+    } else {
+        parts.push("PRECC: watching".to_string());
+    }
+
+    // Add avg latency if we have data
+    if counts.latency_count > 0 {
+        parts.push(format!("{:.1}ms avg", counts.avg_latency_ms()));
+    }
+
+    println!("{}", parts.join(" | "));
+
+    Ok(())
 }
 
 // =============================================================================
@@ -1375,5 +1567,79 @@ mod tests {
         let reason = p.reason();
         assert!(reason.contains("ccc-redirect"));
         assert!(reason.contains("512 bytes"));
+    }
+
+    // =========================================================================
+    // Statusline helpers
+    // =========================================================================
+
+    #[test]
+    fn extract_ts_valid() {
+        let line = r#"{"ts":1710000000,"type":"hook_latency","value":2.5}"#;
+        assert_eq!(extract_ts(line), Some(1710000000));
+    }
+
+    #[test]
+    fn extract_ts_missing() {
+        assert_eq!(extract_ts(r#"{"type":"x"}"#), None);
+    }
+
+    #[test]
+    fn extract_str_field_valid() {
+        let line = r#"{"ts":1,"type":"cd_prepend","value":1.0}"#;
+        assert_eq!(extract_str_field(line, "type"), Some("cd_prepend"));
+    }
+
+    #[test]
+    fn extract_f64_field_valid() {
+        let line = r#"{"ts":1,"type":"hook_latency","value":2.53}"#;
+        let v = extract_f64_field(line, "value").unwrap();
+        assert!((v - 2.53).abs() < 0.001);
+    }
+
+    #[test]
+    fn fmt_tokens_units() {
+        assert_eq!(fmt_tokens(500), "500");
+        assert_eq!(fmt_tokens(1_500), "1.5K");
+        assert_eq!(fmt_tokens(2_500_000), "2.5M");
+    }
+
+    #[test]
+    fn statusline_counts_avg_latency() {
+        let counts = StatuslineCounts {
+            corrections: 0,
+            latency_sum: 10.0,
+            latency_count: 4,
+            tokens_saved: 0,
+            skills_fired: 0,
+            ccc_bytes_saved: 0,
+        };
+        assert!((counts.avg_latency_ms() - 2.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn statusline_counts_zero_latency() {
+        let counts = StatuslineCounts {
+            corrections: 0,
+            latency_sum: 0.0,
+            latency_count: 0,
+            tokens_saved: 0,
+            skills_fired: 0,
+            ccc_bytes_saved: 0,
+        };
+        assert!((counts.avg_latency_ms() - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_session_metrics_empty() {
+        // Should not panic with a future timestamp (no matching events)
+        let far_future = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 999_999;
+        let counts = parse_session_metrics(far_future);
+        assert_eq!(counts.corrections, 0);
+        assert_eq!(counts.latency_count, 0);
     }
 }

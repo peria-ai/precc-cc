@@ -47,48 +47,50 @@ sed -i "s/^version = \".*\"/version = \"${BARE_VERSION}\"/" Cargo.toml
 echo "==> Bumped Cargo.toml version to ${BARE_VERSION}"
 
 # ---------------------------------------------------------------------------
-# Step 1: Sync public files via deploy.toml mappings
+# Step 1: Deploy public repo as a single squashed commit (orphan branch)
+#         Only files listed in deploy.toml [mappings] are included.
 # ---------------------------------------------------------------------------
-echo "==> Step 1: Syncing public repo..."
+echo "==> Step 1: Building squashed deploy commit..."
 cd "$REPO_DIR"
 
-DEMO_DIR="$(grep '^demo_dir' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
-DEMO_REPO="$(grep '^demo_repo' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
-DEMO_BRANCH="$(grep '^remote_branch' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
+DEPLOY_BRANCH="$(grep '^remote_branch' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
+COMMIT_MSG="$(grep '^commit_message' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
 
-# Clone or update the public repo
-if [[ ! -d "$DEMO_DIR/.git" ]]; then
-    git clone "$DEMO_REPO" "$DEMO_DIR"
-fi
-cd "$DEMO_DIR"
-git checkout "$DEMO_BRANCH" 2>/dev/null || git checkout -b "$DEMO_BRANCH"
-git pull origin "$DEMO_BRANCH" --rebase 2>/dev/null || true
-cd "$REPO_DIR"
+# Save current branch to restore later
+ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
-# Copy mapped files from private → public repo
+# Create a temporary orphan branch (no history)
+git checkout --orphan _deploy_tmp
+git rm -rf --cached . > /dev/null 2>&1
+
+# Stage only the mapped files into a temp working tree
+DEPLOY_TREE="$(mktemp -d)"
 while IFS='=' read -r src dst; do
-    # Strip quotes and whitespace from TOML key=value pairs
     src="$(echo "$src" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')"
     dst="$(echo "$dst" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')"
     [[ -z "$src" || "$src" == "["* || "$src" == "#"* ]] && continue
-    [[ "$src" == *"="* ]] && continue  # skip non-mapping lines
+    [[ "$src" == *"="* ]] && continue
 
     if [[ -f "$src" ]]; then
-        mkdir -p "$DEMO_DIR/$(dirname "$dst")"
-        cp "$src" "$DEMO_DIR/$dst"
+        mkdir -p "$DEPLOY_TREE/$(dirname "$dst")"
+        cp "$src" "$DEPLOY_TREE/$dst"
         echo "  $src → $dst"
     else
         echo "  (skipped missing: $src)"
     fi
 done < <(sed -n '/^\[mappings\]/,/^\[/p' deploy.toml | grep -v '^\[')
 
-# Commit and push the public repo
-cd "$DEMO_DIR"
-git add -A
-git diff --cached --quiet && echo "  (no changes to sync)" || \
-    git commit -m "Update to ${VERSION}"
-git push origin "$DEMO_BRANCH"
-cd "$REPO_DIR"
+GIT_WORK_TREE="$DEPLOY_TREE" git add -A
+git commit -m "${COMMIT_MSG} ${VERSION}"
+
+# Push the squashed orphan commit to the public remote
+echo "==> Pushing to ${PUBLIC_REMOTE}/${DEPLOY_BRANCH}..."
+git push "${PUBLIC_REMOTE}" "_deploy_tmp:${DEPLOY_BRANCH}" --force
+
+# Clean up: restore original branch, delete temp branch and tree
+git checkout -f "$ORIGINAL_BRANCH"
+git branch -D _deploy_tmp
+rm -rf "$DEPLOY_TREE"
 
 # ---------------------------------------------------------------------------
 # Step 2: Build binaries
@@ -188,12 +190,16 @@ for TARGET in "${ALL_TARGETS[@]}"; do
     ASSETS+=("${TMP}/${ARCHIVE}")
 done
 
+# Generate SHA256SUMS for all archives
+echo "==> Generating SHA256SUMS..."
+(cd "$TMP" && sha256sum *.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 *.tar.gz > SHA256SUMS)
+ASSETS+=("${TMP}/SHA256SUMS")
+
 # ---------------------------------------------------------------------------
-# Step 4: Push main to public repo (no tag — prevents auto source archives)
+# Step 4: Get public repo SHA (already pushed in Step 1)
 # ---------------------------------------------------------------------------
-echo "==> Step 4: Pushing main to public repo..."
-# Get the SHA that deploy-demo just pushed to the public repo
-PUBLIC_SHA=$(git ls-remote "${PUBLIC_REMOTE}" refs/heads/main | cut -f1)
+echo "==> Step 4: Resolving public repo SHA..."
+PUBLIC_SHA=$(git ls-remote "${PUBLIC_REMOTE}" "refs/heads/${DEPLOY_BRANCH}" | cut -f1)
 
 # Delete existing release and tag on public repo if present (idempotent redeploy)
 gh release delete "${VERSION}" --repo "${PUBLIC_REPO}" --yes 2>/dev/null || true

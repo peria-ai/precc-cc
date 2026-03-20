@@ -100,6 +100,30 @@ trap 'rm -rf "${TMP}"' EXIT
 echo "Downloading ${URL}..."
 curl -fsSL --progress-bar -o "${TMP}/${ARCHIVE}" "${URL}"
 
+# ---------------------------------------------------------------------------
+# Verify SHA256 checksum (if checksums file is available in the release)
+# ---------------------------------------------------------------------------
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+if curl -fsSL -o "${TMP}/SHA256SUMS" "${CHECKSUM_URL}" 2>/dev/null; then
+    echo "Verifying SHA256 checksum..."
+    EXPECTED="$(grep "${ARCHIVE}" "${TMP}/SHA256SUMS" | awk '{print $1}')"
+    if [[ -n "${EXPECTED}" ]]; then
+        ACTUAL="$(sha256sum "${TMP}/${ARCHIVE}" 2>/dev/null || shasum -a 256 "${TMP}/${ARCHIVE}" 2>/dev/null | awk '{print $1}')"
+        ACTUAL="$(echo "${ACTUAL}" | awk '{print $1}')"
+        if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
+            echo "Checksum mismatch!" >&2
+            echo "  Expected: ${EXPECTED}" >&2
+            echo "  Got:      ${ACTUAL}" >&2
+            exit 1
+        fi
+        echo "  Checksum verified: ${ACTUAL}"
+    else
+        echo "  Warning: no checksum entry for ${ARCHIVE} in SHA256SUMS — skipping verification"
+    fi
+else
+    echo "  Note: SHA256SUMS not available for this release — skipping checksum verification"
+fi
+
 echo "Extracting..."
 tar -xzf "${TMP}/${ARCHIVE}" -C "${TMP}"
 EXTRACTED="${TMP}/precc-${VERSION}-${TARGET}"
@@ -124,7 +148,7 @@ SETTINGS="${HOME}/.claude/settings.json"
 
 wire_hook() {
     if [[ ! -f "${SETTINGS}" ]]; then
-        # No settings file — create one with the hook entry
+        # No settings file — create one with the hook and statusline entries
         mkdir -p "$(dirname "${SETTINGS}")"
         cat > "${SETTINGS}" <<EOF
 {
@@ -140,10 +164,14 @@ wire_hook() {
         ]
       }
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "${HOOK_CMD} --statusline"
   }
 }
 EOF
-        echo "  Created ${SETTINGS} with precc-hook entry"
+        echo "  Created ${SETTINGS} with precc-hook and statusline entries"
     elif ! grep -q "precc-hook" "${SETTINGS}" 2>/dev/null; then
         # Settings file exists but no hook — print manual instructions
         echo ""
@@ -157,9 +185,22 @@ EOF
         echo '        "hooks": [{"type": "command", "command": "'"${HOOK_CMD}"'"}]'
         echo '      }'
         echo '    ]'
+        echo '  },'
+        echo '  "statusLine": {'
+        echo '    "type": "command",'
+        echo '    "command": "'"${HOOK_CMD}"' --statusline"'
         echo '  }'
     else
         echo "  Hook already configured in ${SETTINGS} — skipped"
+        # Wire statusline if hook exists but statusline doesn't
+        if ! grep -q "statusLine" "${SETTINGS}" 2>/dev/null; then
+            echo ""
+            echo "  NOTE: Add the statusline to your settings.json for live PRECC metrics:"
+            echo '  "statusLine": {'
+            echo '    "type": "command",'
+            echo '    "command": "'"${HOOK_CMD}"' --statusline"'
+            echo '  }'
+        fi
     fi
 }
 
