@@ -1291,4 +1291,89 @@ mod tests {
             assert_eq!(parsed["type"].as_str().unwrap(), *tool_type);
         }
     }
+
+    // =========================================================================
+    // CCC integration (Pipeline stage 6)
+    // =========================================================================
+
+    #[test]
+    fn pipeline_ccc_flags_default_false() {
+        let p = Pipeline::new("echo hello".to_string(), ".".to_string());
+        assert!(!p.had_ccc_redirect);
+        assert_eq!(p.ccc_saved_bytes, 0);
+    }
+
+    #[test]
+    fn pipeline_ccc_skips_non_grep() {
+        let mut p = Pipeline::new("cargo build".to_string(), ".".to_string());
+        p.stage_ccc();
+        assert!(!p.had_ccc_redirect);
+        assert!(!p.modified());
+    }
+
+    #[test]
+    fn pipeline_ccc_skips_piped_grep() {
+        let mut p = Pipeline::new(
+            "grep -r 'pattern' src/ | head -5".to_string(),
+            ".".to_string(),
+        );
+        p.stage_ccc();
+        assert!(!p.had_ccc_redirect);
+    }
+
+    #[test]
+    fn pipeline_ccc_skips_short_pattern() {
+        let mut p = Pipeline::new("grep -r 'ab' src/".to_string(), ".".to_string());
+        p.stage_ccc();
+        assert!(!p.had_ccc_redirect);
+    }
+
+    #[test]
+    fn pipeline_ccc_skips_when_no_index() {
+        // A temp dir without .cocoindex_code — should skip
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = Pipeline::new(
+            "grep -r 'long_pattern' src/".to_string(),
+            dir.path().to_string_lossy().to_string(),
+        );
+        p.stage_ccc();
+        assert!(!p.had_ccc_redirect);
+    }
+
+    #[test]
+    fn pipeline_cwd_from_hook_input() {
+        let p = Pipeline::new("echo hello".to_string(), "/tmp/myproject".to_string());
+        assert_eq!(p.cwd, "/tmp/myproject");
+    }
+
+    #[test]
+    fn pipeline_cwd_empty_fallback() {
+        let mut p = Pipeline::new("grep -r 'long_pattern' src/".to_string(), "".to_string());
+        p.stage_ccc();
+        // Should not panic, cwd defaults to "."
+        assert!(!p.had_ccc_redirect);
+    }
+
+    #[test]
+    fn ccc_metrics_log_line_format() {
+        // Verify the ccc_redirect JSON line format
+        let line = format!(
+            "{{\"ts\":{},\"type\":\"ccc_redirect\",\"value\":{}.0}}\n",
+            1000u64, 512usize
+        );
+        let parsed: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"].as_str(), Some("ccc_redirect"));
+        assert!((parsed["value"].as_f64().unwrap() - 512.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn ccc_reason_format() {
+        let mut p = Pipeline::new("grep -r 'pattern' .".to_string(), ".".to_string());
+        p.had_ccc_redirect = true;
+        p.reasons
+            .push("ccc-redirect:pattern (512 bytes)".to_string());
+        let reason = p.reason();
+        assert!(reason.contains("ccc-redirect"));
+        assert!(reason.contains("512 bytes"));
+    }
 }

@@ -222,6 +222,8 @@ pub fn revert_files(project_dir: &Path) -> Result<usize> {
 mod tests {
     use super::*;
 
+    // ── compress() individual patterns ──────────────────────────────────
+
     #[test]
     fn compress_removes_filler_words() {
         let input = "Please just make sure to basically run the tests.\n";
@@ -230,6 +232,22 @@ mod tests {
         assert!(!output.contains("just"));
         assert!(!output.contains("basically"));
         assert!(output.contains("ensure"));
+    }
+
+    #[test]
+    fn compress_removes_simply_and_actually() {
+        let input = "You simply need to actually check the output.\n";
+        let output = compress(input);
+        assert!(!output.contains("simply"));
+        assert!(!output.contains("actually"));
+        assert!(output.contains("check the output"));
+    }
+
+    #[test]
+    fn compress_removes_kindly() {
+        let input = "Kindly review the code before merging.\n";
+        let output = compress(input);
+        assert!(!output.contains("Kindly"));
     }
 
     #[test]
@@ -243,12 +261,96 @@ mod tests {
     }
 
     #[test]
+    fn compress_replaces_time_phrases() {
+        let input = "At this point in time we should act in the event that it breaks.\n";
+        let output = compress(input);
+        assert!(output.contains("now"));
+        assert!(output.contains("if"));
+        assert!(!output.contains("At this point in time"));
+        assert!(!output.contains("in the event that"));
+    }
+
+    #[test]
+    fn compress_replaces_purpose_and_regard_phrases() {
+        let input = "For the purpose of testing, with regard to the API.\n";
+        let output = compress(input);
+        assert!(!output.contains("For the purpose of"));
+        assert!(!output.contains("with regard to"));
+    }
+
+    #[test]
+    fn compress_replaces_note_phrases() {
+        let input = "It is important to note that the API is slow. It should be noted that caching helps.\n";
+        let output = compress(input);
+        assert!(output.contains("Note:"));
+        assert!(!output.contains("It is important to note that"));
+        assert!(!output.contains("It should be noted that"));
+    }
+
+    #[test]
+    fn compress_removes_as_mentioned() {
+        let input = "As mentioned earlier, this is key. As you may know, it works.\n";
+        let output = compress(input);
+        assert!(!output.contains("As mentioned earlier"));
+        assert!(!output.contains("As you may know"));
+    }
+
+    #[test]
+    fn compress_replaces_before_doing() {
+        let input = "Before doing anything else run the linter.\n";
+        let output = compress(input);
+        assert!(output.contains("First"));
+        assert!(!output.contains("Before doing anything else"));
+    }
+
+    #[test]
+    fn compress_removes_you_should() {
+        let input = "You should always run tests first.\n";
+        let output = compress(input);
+        assert!(!output.contains("You should"));
+    }
+
+    #[test]
+    fn compress_replaces_keep_in_mind() {
+        let input = "Keep in mind that tests are important.\n";
+        let output = compress(input);
+        assert!(output.contains("note:"));
+        assert!(!output.contains("Keep in mind"));
+    }
+
+    #[test]
     fn compress_abbreviates_common_phrases() {
         let input = "For example, such as lists and so on including but not limited to etc.\n";
         let output = compress(input);
         assert!(output.contains("e.g."));
         assert!(output.contains("incl."));
     }
+
+    #[test]
+    fn compress_replaces_in_other_words() {
+        let input = "In other words, it fails. That is to say, it crashes.\n";
+        let output = compress(input);
+        assert!(output.contains("i.e."));
+        assert!(!output.contains("In other words"));
+        assert!(!output.contains("That is to say"));
+    }
+
+    #[test]
+    fn compress_replaces_and_others() {
+        let input = "Functions, classes, and others are exported.\n";
+        let output = compress(input);
+        assert!(output.contains("..."));
+        assert!(!output.contains("and others"));
+    }
+
+    #[test]
+    fn compress_in_terms_of() {
+        let input = "In terms of performance, it is fast.\n";
+        let output = compress(input);
+        assert!(!output.contains("In terms of"));
+    }
+
+    // ── compress() whitespace handling ───────────────────────────────────
 
     #[test]
     fn compress_collapses_whitespace() {
@@ -259,18 +361,112 @@ mod tests {
     }
 
     #[test]
+    fn compress_trims_trailing_spaces() {
+        let input = "Hello world   \nGoodbye   \n";
+        let output = compress(input);
+        assert!(!output.contains("   \n"));
+    }
+
+    #[test]
+    fn compress_trims_leading_spaces_on_lines() {
+        let input = "   Hello world\n   Goodbye\n";
+        let output = compress(input);
+        // Leading spaces on lines should be collapsed
+        assert!(!output.contains("   "));
+    }
+
+    #[test]
+    fn compress_ends_with_newline() {
+        let input = "Hello world";
+        let output = compress(input);
+        assert!(output.ends_with('\n'));
+    }
+
+    // ── compress() case insensitivity ────────────────────────────────────
+
+    #[test]
+    fn compress_case_insensitive() {
+        let upper = "PLEASE run the tests BASICALLY.\n";
+        let lower = "please run the tests basically.\n";
+        let mixed = "Please run the tests Basically.\n";
+
+        let out_upper = compress(upper);
+        let out_lower = compress(lower);
+        let out_mixed = compress(mixed);
+
+        assert!(!out_upper.contains("PLEASE"));
+        assert!(!out_lower.contains("please"));
+        assert!(!out_mixed.contains("Please"));
+        assert!(!out_upper.contains("BASICALLY"));
+        assert!(!out_lower.contains("basically"));
+        assert!(!out_mixed.contains("Basically"));
+    }
+
+    // ── compress() preserves important content ──────────────────────────
+
+    #[test]
     fn compress_preserves_code_blocks() {
-        // Code blocks should pass through mostly unchanged (no filler words typically)
         let input = "```bash\ncargo build --release\n```\n";
         let output = compress(input);
         assert!(output.contains("cargo build --release"));
     }
 
     #[test]
+    fn compress_preserves_urls() {
+        let input = "See https://github.com/example/repo for details.\n";
+        let output = compress(input);
+        assert!(output.contains("https://github.com/example/repo"));
+    }
+
+    #[test]
+    fn compress_preserves_headings() {
+        let input = "# Main Title\n\n## Section\n\nContent here.\n";
+        let output = compress(input);
+        assert!(output.contains("# Main Title"));
+        assert!(output.contains("## Section"));
+    }
+
+    #[test]
+    fn compress_preserves_bullet_lists() {
+        let input = "- Item one\n- Item two\n- Item three\n";
+        let output = compress(input);
+        assert!(output.contains("- Item one"));
+        assert!(output.contains("- Item two"));
+    }
+
+    #[test]
+    fn compress_empty_input() {
+        let output = compress("");
+        assert_eq!(output, "\n");
+    }
+
+    #[test]
+    fn compress_already_compact() {
+        let input = "Run tests.\n";
+        let output = compress(input);
+        assert_eq!(output, "Run tests.\n");
+    }
+
+    // ── estimate_tokens ─────────────────────────────────────────────────
+
+    #[test]
     fn estimate_tokens_basic() {
         assert_eq!(estimate_tokens("1234"), 1);
         assert_eq!(estimate_tokens("12345678"), 2);
     }
+
+    #[test]
+    fn estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_short() {
+        assert_eq!(estimate_tokens("ab"), 0); // 2/4 = 0
+        assert_eq!(estimate_tokens("abc"), 0);
+    }
+
+    // ── discover_files ──────────────────────────────────────────────────
 
     #[test]
     fn discover_files_empty_dir() {
@@ -289,6 +485,28 @@ mod tests {
     }
 
     #[test]
+    fn discover_files_finds_dot_claude_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let dot_claude = dir.path().join(".claude");
+        std::fs::create_dir_all(&dot_claude).unwrap();
+        std::fs::write(dot_claude.join("CLAUDE.md"), "# Dot Claude\n").unwrap();
+        let files = discover_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_string_lossy().contains(".claude/CLAUDE.md"));
+    }
+
+    #[test]
+    fn discover_files_finds_both_claude_mds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# Root\n").unwrap();
+        let dot_claude = dir.path().join(".claude");
+        std::fs::create_dir_all(&dot_claude).unwrap();
+        std::fs::write(dot_claude.join("CLAUDE.md"), "# Dot\n").unwrap();
+        let files = discover_files(dir.path());
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
     fn discover_files_finds_memory_files() {
         let dir = tempfile::tempdir().unwrap();
         let mem_dir = dir.path().join(".claude").join("memory");
@@ -298,6 +516,139 @@ mod tests {
         let files = discover_files(dir.path());
         assert_eq!(files.len(), 1); // backup excluded
     }
+
+    #[test]
+    fn discover_files_finds_multiple_memory_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("user.md"), "# User\n").unwrap();
+        std::fs::write(mem_dir.join("project.md"), "# Project\n").unwrap();
+        std::fs::write(mem_dir.join("feedback.md"), "# Feedback\n").unwrap();
+        let files = discover_files(dir.path());
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn discover_files_finds_subdir_claude_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("subproject");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("CLAUDE.md"), "# Sub\n").unwrap();
+        let files = discover_files(dir.path());
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn discover_files_skips_hidden_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = dir.path().join(".hidden");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(hidden.join("CLAUDE.md"), "# Hidden\n").unwrap();
+        // .hidden/CLAUDE.md should NOT be found (hidden subdirs skipped)
+        // but .claude/CLAUDE.md IS found (special case)
+        let files = discover_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn discover_files_ignores_non_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("notes.txt"), "not md\n").unwrap();
+        std::fs::write(mem_dir.join("data.json"), "{}").unwrap();
+        let files = discover_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    // ── compress_files ──────────────────────────────────────────────────
+
+    #[test]
+    fn compress_files_skips_compact_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("CLAUDE.md");
+        // This content has no filler words — should be skipped (< 5% savings)
+        std::fs::write(&file, "# Build\n\n```bash\ncargo build\ncargo test\n```\n").unwrap();
+        let results = compress_files(dir.path(), false).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn compress_files_returns_correct_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("CLAUDE.md");
+        let original = "Please just basically make sure to run all the tests before doing anything else with the code in order to verify that everything works properly and as you may know this is important.\n";
+        std::fs::write(&file, original).unwrap();
+
+        let results = compress_files(dir.path(), true).unwrap();
+        assert_eq!(results.len(), 1);
+        let r = &results[0];
+        assert!(r.saved_tokens > 0);
+        assert!(r.pct_saved >= MIN_SAVINGS_PCT);
+        assert_eq!(r.original_tokens, estimate_tokens(original));
+        assert!(r.compressed_tokens < r.original_tokens);
+    }
+
+    #[test]
+    fn compress_files_creates_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("CLAUDE.md");
+        let original = "Please just basically make sure to run all the tests in order to verify everything works as you should know.\n";
+        std::fs::write(&file, original).unwrap();
+
+        compress_files(dir.path(), false).unwrap();
+
+        let backup = dir.path().join("CLAUDE.md.backup");
+        assert!(backup.exists());
+        let backup_content = std::fs::read_to_string(&backup).unwrap();
+        assert_eq!(backup_content, original);
+    }
+
+    #[test]
+    fn compress_files_does_not_overwrite_existing_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("CLAUDE.md");
+        let backup_path = dir.path().join("CLAUDE.md.backup");
+        let original_backup = "original backup content\n";
+
+        std::fs::write(&file, "Please just basically make sure to run all the tests in order to verify everything works as you should know.\n").unwrap();
+        std::fs::write(&backup_path, original_backup).unwrap();
+
+        compress_files(dir.path(), false).unwrap();
+
+        // Backup should not be overwritten
+        let backup_content = std::fs::read_to_string(&backup_path).unwrap();
+        assert_eq!(backup_content, original_backup);
+    }
+
+    #[test]
+    fn compress_files_dry_run_does_not_modify() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("CLAUDE.md");
+        let original = "Please just basically make sure to run all the tests in order to verify everything works properly.\n";
+        std::fs::write(&file, original).unwrap();
+
+        let results = compress_files(dir.path(), true).unwrap();
+        assert!(!results.is_empty());
+
+        // File should be unchanged
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, original);
+
+        // No backup created
+        let backup = dir.path().join("CLAUDE.md.backup");
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn compress_files_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = compress_files(dir.path(), false).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── revert_files ────────────────────────────────────────────────────
 
     #[test]
     fn compress_and_revert_roundtrip() {
@@ -323,17 +674,55 @@ mod tests {
     }
 
     #[test]
-    fn compress_files_dry_run_does_not_modify() {
+    fn revert_no_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# Test\n").unwrap();
+        let reverted = revert_files(dir.path()).unwrap();
+        assert_eq!(reverted, 0);
+    }
+
+    #[test]
+    fn revert_removes_backup_files() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("CLAUDE.md");
-        let original = "Please just basically make sure to run all the tests in order to verify everything works properly.\n";
-        std::fs::write(&file, original).unwrap();
+        let backup = dir.path().join("CLAUDE.md.backup");
+        std::fs::write(&file, "compressed\n").unwrap();
+        std::fs::write(&backup, "original\n").unwrap();
+
+        revert_files(dir.path()).unwrap();
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn revert_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let reverted = revert_files(dir.path()).unwrap();
+        assert_eq!(reverted, 0);
+    }
+
+    // ── compress_files with multiple files ──────────────────────────────
+
+    #[test]
+    fn compress_files_processes_multiple() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Root CLAUDE.md
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "Please just basically make sure to run all the tests in order to verify everything works properly.\n",
+        )
+        .unwrap();
+
+        // Memory file
+        let mem_dir = dir.path().join(".claude").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(
+            mem_dir.join("user.md"),
+            "As you may know, the user should kindly just basically make sure to follow the instructions in order to succeed.\n",
+        )
+        .unwrap();
 
         let results = compress_files(dir.path(), true).unwrap();
-        assert!(!results.is_empty());
-
-        // File should be unchanged
-        let content = std::fs::read_to_string(&file).unwrap();
-        assert_eq!(content, original);
+        assert!(results.len() >= 1); // At least one should have enough savings
     }
 }

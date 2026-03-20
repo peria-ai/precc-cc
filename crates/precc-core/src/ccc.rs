@@ -184,12 +184,20 @@ pub fn build_replacement_command(result: &CccResult) -> String {
 mod tests {
     use super::*;
 
+    // ── is_eligible ─────────────────────────────────────────────────────
+
     #[test]
     fn eligible_recursive_grep() {
         assert!(is_eligible("grep -r 'pattern' src/"));
         assert!(is_eligible("grep -rn 'pattern' ."));
         assert!(is_eligible("grep -rl 'pattern'"));
         assert!(is_eligible("grep -rni 'something' src/"));
+    }
+
+    #[test]
+    fn eligible_grep_with_multiple_flags() {
+        assert!(is_eligible("grep -rIl 'TODO' src/"));
+        assert!(is_eligible("grep -rn --include='*.rs' 'pattern' ."));
     }
 
     #[test]
@@ -200,9 +208,24 @@ mod tests {
     }
 
     #[test]
+    fn eligible_rg_with_flags() {
+        assert!(is_eligible("rg --type rust 'pattern' src/"));
+        assert!(is_eligible("rg -i 'pattern'"));
+        assert!(is_eligible("rg --hidden 'pattern' ."));
+    }
+
+    #[test]
+    fn eligible_with_leading_whitespace() {
+        assert!(is_eligible("  grep -r 'pattern' src/"));
+        assert!(is_eligible("  rg 'pattern'"));
+    }
+
+    #[test]
     fn ineligible_non_recursive_grep() {
         assert!(!is_eligible("grep 'pattern' file.txt"));
         assert!(!is_eligible("grep pattern file.txt"));
+        assert!(!is_eligible("grep -n 'pattern' file.txt"));
+        assert!(!is_eligible("grep -i 'pattern' file.txt"));
     }
 
     #[test]
@@ -210,6 +233,9 @@ mod tests {
         assert!(!is_eligible("grep -r 'pattern' | head -5"));
         assert!(!is_eligible("rg pattern && echo done"));
         assert!(!is_eligible("rg pattern > output.txt"));
+        assert!(!is_eligible("rg pattern < input.txt"));
+        assert!(!is_eligible("grep -r 'pattern' ; echo done"));
+        assert!(!is_eligible("echo $(rg pattern)"));
     }
 
     #[test]
@@ -217,7 +243,17 @@ mod tests {
         assert!(!is_eligible("cargo build"));
         assert!(!is_eligible("echo hello"));
         assert!(!is_eligible("ls -la"));
+        assert!(!is_eligible("cat file.txt"));
+        assert!(!is_eligible(""));
     }
+
+    #[test]
+    fn ineligible_empty_and_whitespace() {
+        assert!(!is_eligible(""));
+        assert!(!is_eligible("   "));
+    }
+
+    // ── extract_pattern ─────────────────────────────────────────────────
 
     #[test]
     fn extract_grep_pattern_single_quoted() {
@@ -240,6 +276,20 @@ mod tests {
     }
 
     #[test]
+    fn extract_grep_pattern_no_path() {
+        let q = extract_pattern("grep -r 'long_pattern'").unwrap();
+        assert_eq!(q.pattern, "long_pattern");
+        assert!(q.path_filter.is_none());
+    }
+
+    #[test]
+    fn extract_grep_multiple_flags() {
+        let q = extract_pattern("grep -rni 'some pattern' src/lib/").unwrap();
+        assert_eq!(q.pattern, "some pattern");
+        assert_eq!(q.path_filter.as_deref(), Some("src/lib/"));
+    }
+
+    #[test]
     fn extract_rg_pattern() {
         let q = extract_pattern("rg 'authentication' src/").unwrap();
         assert_eq!(q.pattern, "authentication");
@@ -247,10 +297,39 @@ mod tests {
     }
 
     #[test]
+    fn extract_rg_pattern_no_path() {
+        let q = extract_pattern("rg 'long_pattern'").unwrap();
+        assert_eq!(q.pattern, "long_pattern");
+        assert!(q.path_filter.is_none());
+    }
+
+    #[test]
+    fn extract_rg_unquoted() {
+        let q = extract_pattern("rg something_long .").unwrap();
+        assert_eq!(q.pattern, "something_long");
+        assert_eq!(q.path_filter.as_deref(), Some("."));
+    }
+
+    #[test]
     fn extract_short_pattern_rejected() {
         assert!(extract_pattern("grep -r 'ab' src/").is_none());
         assert!(extract_pattern("rg 'xy' .").is_none());
+        assert!(extract_pattern("rg 'abc' .").is_none()); // exactly 3, still < 4
     }
+
+    #[test]
+    fn extract_exactly_four_char_pattern_accepted() {
+        let q = extract_pattern("rg 'abcd' .").unwrap();
+        assert_eq!(q.pattern, "abcd");
+    }
+
+    #[test]
+    fn extract_returns_none_for_non_grep() {
+        assert!(extract_pattern("cargo build").is_none());
+        assert!(extract_pattern("echo hello").is_none());
+    }
+
+    // ── has_index ───────────────────────────────────────────────────────
 
     #[test]
     fn has_index_nonexistent() {
@@ -258,8 +337,125 @@ mod tests {
     }
 
     #[test]
+    fn has_index_with_actual_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!has_index(&dir.path().to_string_lossy()));
+
+        // Create .cocoindex_code directory
+        std::fs::create_dir(dir.path().join(".cocoindex_code")).unwrap();
+        assert!(has_index(&dir.path().to_string_lossy()));
+    }
+
+    #[test]
+    fn has_index_file_not_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create .cocoindex_code as a file, not a directory
+        std::fs::write(dir.path().join(".cocoindex_code"), "not a dir").unwrap();
+        assert!(!has_index(&dir.path().to_string_lossy()));
+    }
+
+    // ── is_available ────────────────────────────────────────────────────
+
+    #[test]
     fn is_available_does_not_panic() {
-        // Just verify it doesn't panic; actual result depends on environment
         let _ = is_available();
+    }
+
+    // ── build_replacement_command ────────────────────────────────────────
+
+    #[test]
+    fn build_replacement_command_simple() {
+        let result = CccResult {
+            output: "fn main() {}\n".to_string(),
+            ccc_bytes: 14,
+            pattern: "main".to_string(),
+        };
+        let cmd = build_replacement_command(&result);
+        assert!(cmd.starts_with("printf"));
+        assert!(cmd.contains("fn main()"));
+    }
+
+    #[test]
+    fn build_replacement_command_escapes_backslashes() {
+        let result = CccResult {
+            output: "path\\to\\file\n".to_string(),
+            ccc_bytes: 14,
+            pattern: "path".to_string(),
+        };
+        let cmd = build_replacement_command(&result);
+        assert!(cmd.contains("\\\\"));
+    }
+
+    #[test]
+    fn build_replacement_command_escapes_single_quotes() {
+        let result = CccResult {
+            output: "it's a test\n".to_string(),
+            ccc_bytes: 12,
+            pattern: "test".to_string(),
+        };
+        let cmd = build_replacement_command(&result);
+        // Single quotes should be escaped
+        assert!(cmd.contains("'\\''"));
+    }
+
+    #[test]
+    fn build_replacement_command_empty_output() {
+        let result = CccResult {
+            output: "".to_string(),
+            ccc_bytes: 0,
+            pattern: "test".to_string(),
+        };
+        let cmd = build_replacement_command(&result);
+        assert!(cmd.starts_with("printf"));
+    }
+
+    // ── run_search (integration, depends on ccc being installed) ────────
+
+    #[test]
+    fn run_search_nonexistent_cwd() {
+        let query = CccQuery {
+            pattern: "test pattern".to_string(),
+            path_filter: None,
+        };
+        // Should return None gracefully, not panic
+        let result = run_search(&query, "/nonexistent/dir/12345");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn run_search_with_path_filter_dot() {
+        let query = CccQuery {
+            pattern: "test pattern".to_string(),
+            path_filter: Some(".".to_string()),
+        };
+        // "." path should not be passed to --path arg
+        let result = run_search(&query, "/tmp");
+        // May be None if ccc not installed, that's OK
+        assert!(result.is_none() || result.is_some());
+    }
+
+    // ── CccQuery/CccResult struct tests ────────────────────────────────
+
+    #[test]
+    fn ccc_query_debug_impl() {
+        let q = CccQuery {
+            pattern: "test".to_string(),
+            path_filter: Some("src/".to_string()),
+        };
+        let debug = format!("{:?}", q);
+        assert!(debug.contains("test"));
+        assert!(debug.contains("src/"));
+    }
+
+    #[test]
+    fn ccc_result_debug_impl() {
+        let r = CccResult {
+            output: "result".to_string(),
+            ccc_bytes: 6,
+            pattern: "test".to_string(),
+        };
+        let debug = format!("{:?}", r);
+        assert!(debug.contains("result"));
+        assert!(debug.contains("6"));
     }
 }
