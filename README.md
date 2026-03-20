@@ -61,6 +61,7 @@ precc report
 - **Prevents repeated failures** — Learns from past session failures and auto-corrects commands that would fail the same way
 - **Compresses CLI output** — Rewrites commands to use [RTK](https://github.com/rtk-ai/rtk) for 60-90% smaller output, reducing context growth
 - **Suggests GDB debugging** — When a command fails repeatedly, suggests `precc debug` instead of edit-compile-retry cycles
+- **AST-driven semantic code search** — Integrates [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) for semantic search that understands code structure across 28+ languages, saving 70% tokens vs raw grep
 
 ## Security
 
@@ -74,10 +75,49 @@ $ precc init
   Encryption: AES-256 (machine-bound key, first 4 bytes: a3f7...)
 ```
 
+## Semantic Code Search (cocoindex-code)
+
+PRECC integrates [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) to give Claude Code AST-aware semantic search. Instead of grep matching raw text, it understands code structure (classes, functions, methods) and supports natural language queries like "authentication middleware" or "database connection pooling".
+
+The installer sets it up automatically. To use manually:
+
+```bash
+# Install
+pipx install cocoindex-code
+
+# Index your project
+ccc init && ccc index
+
+# Search by meaning
+ccc search "user session management"
+ccc search --lang python --lang typescript "error handling"
+
+# Enable as MCP server for Claude Code
+claude mcp add cocoindex-code -- ccc mcp
+```
+
+### How it works
+
+PRECC's hook automatically intercepts recursive `grep` and `rg` commands. When a project has a cocoindex-code index (`.cocoindex_code/`), the hook:
+
+1. Extracts the search pattern from the grep/rg command
+2. Runs `ccc search` with that pattern (AST-aware, semantic matching)
+3. Compares output sizes — if ccc returns fewer bytes, it uses the ccc result
+4. Logs the byte/token savings to `~/.precc/ccc-metrics.jsonl`
+
+View savings with:
+
+```bash
+precc-ccc-savings.sh
+# or via plugin command:
+precc ccc-savings
+```
+
 ## Requirements
 
 - Claude Code (with hooks support)
 - [RTK](https://github.com/rtk-ai/rtk) (optional, for output compression)
+- [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) (optional, for AST-driven semantic search)
 
 ## Measured Results
 
