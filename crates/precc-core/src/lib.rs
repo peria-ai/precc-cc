@@ -2,6 +2,8 @@
 
 pub mod advisor;
 pub mod agent_propagate;
+pub mod ccc;
+pub mod compress;
 pub mod consent;
 pub mod context;
 pub mod db;

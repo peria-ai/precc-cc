@@ -21,8 +21,8 @@
 //! - Schema init skipped (precc init handles it)
 
 use precc_core::{
-    agent_propagate, context, db, grep_filter, license, post_observe, read_filter, rtk, skills,
-    update_check,
+    agent_propagate, ccc, context, db, grep_filter, license, post_observe, read_filter, rtk,
+    skills, update_check,
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -98,8 +98,20 @@ fn run_bash_pipeline(
         return Ok(());
     }
 
+    // Resolve cwd from hook input
+    let cwd = hook_input
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .unwrap_or_default();
+
     // Run pipeline
-    let mut pipeline = Pipeline::new(command);
+    let mut pipeline = Pipeline::new(command, cwd);
     pipeline.run();
 
     // Emit when command was rewritten OR when there's a GDB suggestion to surface.
@@ -420,22 +432,28 @@ fn append_metrics_log_post(
 struct Pipeline {
     original: String,
     command: String,
+    cwd: String,
     reasons: Vec<String>,
     // Flags set by each stage for metrics reporting
     had_cd_prepend: bool,
     had_rtk_rewrite: bool,
     had_gdb_suggestion: bool,
+    had_ccc_redirect: bool,
+    ccc_saved_bytes: usize,
 }
 
 impl Pipeline {
-    fn new(command: String) -> Self {
+    fn new(command: String, cwd: String) -> Self {
         Self {
             original: command.clone(),
             command,
+            cwd,
             reasons: Vec::new(),
             had_cd_prepend: false,
             had_rtk_rewrite: false,
             had_gdb_suggestion: false,
+            had_ccc_redirect: false,
+            ccc_saved_bytes: 0,
         }
     }
 
@@ -463,6 +481,9 @@ impl Pipeline {
 
         // Stage 5: RTK rewriting
         self.stage_rtk();
+
+        // Stage 6: CCC semantic search redirect (Pillar 2b)
+        self.stage_ccc();
     }
 
     /// Stage 2: Query heuristics.db for matching skills (read-only).
@@ -658,6 +679,51 @@ impl Pipeline {
         }
     }
 
+    /// Stage 6: CCC semantic search redirect (Pillar 2b).
+    ///
+    /// Intercepts recursive grep/rg commands and redirects through `ccc search`
+    /// when the project has a cocoindex-code index. This stage spawns a subprocess
+    /// so it only activates when all preconditions are met.
+    fn stage_ccc(&mut self) {
+        // Fast reject: only grep/rg commands
+        if !ccc::is_eligible(&self.command) {
+            return;
+        }
+
+        // Extract search pattern
+        let query = match ccc::extract_pattern(&self.command) {
+            Some(q) => q,
+            None => return,
+        };
+
+        // Check ccc availability (cached) and project index
+        if !ccc::is_available() {
+            return;
+        }
+
+        let cwd = if self.cwd.is_empty() { "." } else { &self.cwd };
+
+        if !ccc::has_index(cwd) {
+            return;
+        }
+
+        // Run ccc search
+        let result = match ccc::run_search(&query, cwd) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Replace command with ccc output
+        let replacement = ccc::build_replacement_command(&result);
+        self.ccc_saved_bytes = result.ccc_bytes; // conservative: we saved at least this
+        self.command = replacement;
+        self.had_ccc_redirect = true;
+        self.reasons.push(format!(
+            "ccc-redirect:{} ({} bytes)",
+            result.pattern, result.ccc_bytes
+        ));
+    }
+
     /// Helper: resolve project root for skill template application.
     fn resolve_project_root(&self) -> String {
         let ctx = context::resolve(&self.command);
@@ -738,6 +804,12 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"gdb_suggestion\",\"value\":1.0}}\n",
             ts
+        ));
+    }
+    if pipeline.had_ccc_redirect {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"ccc_redirect\",\"value\":{}.0}}\n",
+            ts, pipeline.ccc_saved_bytes
         ));
     }
 
@@ -882,7 +954,7 @@ mod tests {
 
     #[test]
     fn pipeline_no_modification() {
-        let mut p = Pipeline::new("echo hello".to_string());
+        let mut p = Pipeline::new("echo hello".to_string(), ".".to_string());
         // Only run RTK stage (others need filesystem/DB)
         p.stage_rtk();
         assert!(!p.modified());
@@ -892,7 +964,7 @@ mod tests {
     fn pipeline_rtk_rewrite() {
         // This test depends on rtk being available, which it may not be in CI.
         // The rtk module handles this check internally.
-        let mut p = Pipeline::new("git status".to_string());
+        let mut p = Pipeline::new("git status".to_string(), ".".to_string());
         p.stage_rtk();
         // If rtk is available, command should be rewritten
         // If not, command should be unchanged
@@ -902,7 +974,7 @@ mod tests {
 
     #[test]
     fn pipeline_rtk_rewrite_preserves_cd_prefix() {
-        let mut p = Pipeline::new("cd /tmp && git status".to_string());
+        let mut p = Pipeline::new("cd /tmp && git status".to_string(), ".".to_string());
         p.stage_rtk();
         if p.modified() {
             assert!(p.command.starts_with("cd /tmp && rtk git status"));
@@ -932,13 +1004,13 @@ mod tests {
 
     #[test]
     fn pipeline_reason_empty() {
-        let p = Pipeline::new("echo hello".to_string());
+        let p = Pipeline::new("echo hello".to_string(), ".".to_string());
         assert_eq!(p.reason(), "PRECC");
     }
 
     #[test]
     fn pipeline_reason_with_entries() {
-        let mut p = Pipeline::new("echo hello".to_string());
+        let mut p = Pipeline::new("echo hello".to_string(), ".".to_string());
         p.reasons.push("rtk-rewrite".to_string());
         p.reasons.push("cd:Cargo.toml (conf=0.9)".to_string());
         assert_eq!(p.reason(), "PRECC: rtk-rewrite; cd:Cargo.toml (conf=0.9)");
@@ -946,7 +1018,7 @@ mod tests {
 
     #[test]
     fn pipeline_flags_default_false() {
-        let p = Pipeline::new("echo hello".to_string());
+        let p = Pipeline::new("echo hello".to_string(), ".".to_string());
         assert!(!p.had_cd_prepend);
         assert!(!p.had_rtk_rewrite);
     }

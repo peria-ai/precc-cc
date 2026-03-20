@@ -10,8 +10,8 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use precc_core::{
-    advisor, consent, db, gdb, license, metrics, mining, promote, rtk, sharing, skills, telemetry,
-    update_check,
+    advisor, compress, consent, db, gdb, license, metrics, mining, promote, rtk, sharing, skills,
+    telemetry, update_check,
 };
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
@@ -65,6 +65,17 @@ enum Commands {
     },
     /// Setup hook and databases
     Init,
+    /// Compress CLAUDE.md and context files to reduce token usage
+    Compress {
+        /// Show what would change without modifying files
+        #[arg(long)]
+        dry_run: bool,
+        /// Restore original files from backups
+        #[arg(long)]
+        revert: bool,
+        /// Project directory (defaults to current directory)
+        dir: Option<String>,
+    },
     /// Convert a bash script to an animated GIF at a target duration
     Gif {
         /// Bash script to animate
@@ -230,6 +241,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Report) => cmd_report(),
+        Some(Commands::Compress {
+            dry_run,
+            revert,
+            dir,
+        }) => cmd_compress(dry_run, revert, dir),
         Some(Commands::Savings { all }) => cmd_savings(all),
         Some(Commands::Gif {
             script,
@@ -1705,8 +1721,57 @@ fn cmd_savings(all: bool) -> Result<()> {
     println!("  PRECC-over-RTK total  : {:>8.0} tokens", precc_over_rtk);
     println!();
 
+    // ---- CCC semantic search savings (Pillar 2b) -------------------------
+    let ccc_count: i64 = if let Ok(conn) = db::open_metrics(&data_dir) {
+        metrics::summary(&conn, metrics::MetricType::Custom("ccc_redirect"))?
+            .map(|s| s.count as i64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let ccc_saved_bytes: f64 = if let Ok(conn) = db::open_metrics(&data_dir) {
+        metrics::summary(&conn, metrics::MetricType::Custom("ccc_redirect"))?
+            .map(|s| s.total)
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let ccc_tokens = ccc_saved_bytes / 4.0;
+
+    if ccc_count > 0 {
+        println!("CCC semantic search savings (Pillar 2b)");
+        println!("---------------------------------------");
+        println!("  grep/rg redirected    : {:>8}", ccc_count);
+        println!("  Est. tokens saved     : {:>8.0}", ccc_tokens);
+        println!();
+    }
+
+    // ---- Context compression savings (Pillar 3) --------------------------
+    let compress_count: i64 = if let Ok(conn) = db::open_metrics(&data_dir) {
+        metrics::summary(&conn, metrics::MetricType::Custom("context_compress"))?
+            .map(|s| s.count as i64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let compress_tokens: f64 = if let Ok(conn) = db::open_metrics(&data_dir) {
+        metrics::summary(&conn, metrics::MetricType::Custom("context_compress"))?
+            .map(|s| s.total)
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+
+    if compress_count > 0 {
+        println!("Context file compression savings (Pillar 3)");
+        println!("--------------------------------------------");
+        println!("  Compression runs      : {:>8}", compress_count);
+        println!("  Tokens saved          : {:>8.0}", compress_tokens);
+        println!();
+    }
+
     // ---- Grand total ---------------------------------------------------
-    let grand_total = rtk_tokens + precc_over_rtk;
+    let grand_total = rtk_tokens + precc_over_rtk + ccc_tokens + compress_tokens;
     let precc_pct = if grand_total > 0.0 {
         precc_over_rtk / grand_total * 100.0
     } else {
@@ -1935,6 +2000,89 @@ fn cmd_savings(all: bool) -> Result<()> {
 
     // Telemetry: send anonymous aggregated data if consented (rate-limited)
     let _ = telemetry::maybe_send(&data_dir);
+
+    Ok(())
+}
+
+// =============================================================================
+// Compress
+// =============================================================================
+
+fn cmd_compress(dry_run: bool, revert: bool, dir: Option<String>) -> Result<()> {
+    let project_dir = match dir {
+        Some(d) => std::path::PathBuf::from(d),
+        None => std::env::current_dir()?,
+    };
+
+    if revert {
+        let count = compress::revert_files(&project_dir)?;
+        if count > 0 {
+            println!("Reverted {} file(s).", count);
+        } else {
+            println!("No backups found.");
+        }
+        return Ok(());
+    }
+
+    let files = compress::discover_files(&project_dir);
+    if files.is_empty() {
+        println!("No context files found (CLAUDE.md, .claude/memory/*.md).");
+        return Ok(());
+    }
+
+    println!("Compressing {} context file(s)...", files.len());
+    println!();
+
+    let results = compress::compress_files(&project_dir, dry_run)?;
+
+    for r in &results {
+        let rel = r
+            .file
+            .strip_prefix(&project_dir)
+            .unwrap_or(&r.file)
+            .display();
+        println!(
+            "  {}: {} -> {} tokens (saved {}, {}%)",
+            rel, r.original_tokens, r.compressed_tokens, r.saved_tokens, r.pct_saved
+        );
+    }
+
+    if results.is_empty() {
+        println!("All files already compact. Nothing to do.");
+        return Ok(());
+    }
+
+    let total_saved: usize = results.iter().map(|r| r.saved_tokens).sum();
+    let total_orig: usize = results.iter().map(|r| r.original_tokens).sum();
+    let total_pct = if total_orig > 0 {
+        total_saved * 100 / total_orig
+    } else {
+        0
+    };
+
+    println!();
+    println!("Total: {} tokens saved ({}%)", total_saved, total_pct);
+
+    if dry_run {
+        println!("(dry run -- no files modified)");
+    } else {
+        // Log to metrics.db
+        if let Ok(data_dir) = db::data_dir() {
+            if let Ok(conn) = db::open_metrics(&data_dir) {
+                let _ = metrics::record(
+                    &conn,
+                    metrics::MetricType::Custom("context_compress"),
+                    total_saved as f64,
+                    Some(&format!(
+                        "{{\"files\":{},\"pct\":{}}}",
+                        results.len(),
+                        total_pct
+                    )),
+                );
+            }
+        }
+        println!("Backups saved as *.backup. Revert with: precc compress --revert");
+    }
 
     Ok(())
 }
