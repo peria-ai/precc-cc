@@ -86,10 +86,6 @@ done
 # ---------------------------------------------------------------------------
 VERSION_FILES=(
     "Cargo.toml"                                          # workspace version
-    "plugins/openclaw/skills/precc-token-saver/SKILL.md"  # YAML frontmatter
-    "plugins/openclaw/openclaw.plugin.json"               # JSON
-    "plugins/zeroclaw/SKILL.toml"                         # TOML
-    "plugins/zeroclaw/Cargo.toml"                         # ZeroClaw crate
 )
 
 # ---------------------------------------------------------------------------
@@ -130,8 +126,9 @@ TAG="v${NEW_VERSION}"
 [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
     die "Invalid version: '$NEW_VERSION' (expected X.Y.Z)"
 
-[[ "$NEW_VERSION" != "$CURRENT" ]] || \
-    die "Version is already ${CURRENT} — nothing to bump"
+if [[ "$NEW_VERSION" == "$CURRENT" ]]; then
+    warn "Version is already ${CURRENT} — skipping bump, proceeding to tag/push/deploy"
+fi
 
 # ---------------------------------------------------------------------------
 # Pre-flight checks
@@ -245,7 +242,8 @@ info "Committing..."
 git add "${VERSION_FILES[@]}"
 # Also stage any other modified/new files (e.g. source code changes)
 git add -u
-git commit -m "$COMMIT_MSG" || die "Commit failed"
+git diff --cached --quiet && info "Nothing to commit (version already bumped)" || \
+    git commit -m "$COMMIT_MSG" || die "Commit failed"
 
 # ---------------------------------------------------------------------------
 # Push
