@@ -118,7 +118,7 @@ done
 
 # Install ccc hook and savings scripts
 SCRIPT_URL_BASE="https://raw.githubusercontent.com/${REPO}/main/scripts"
-for script in precc-ccc-hook.sh precc-ccc-savings.sh; do
+for script in precc-ccc-hook.sh precc-ccc-savings.sh precc-ts-compress.js precc-ts-savings.sh; do
     curl -fsSL "${SCRIPT_URL_BASE}/${script}" -o "${BIN_DIR}/${script}" 2>/dev/null \
         && chmod +x "${BIN_DIR}/${script}" \
         && echo "  Installed ${BIN_DIR}/${script}" \

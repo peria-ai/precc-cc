@@ -51,8 +51,8 @@ precc skills show <name>    # full trigger/action detail
 precc skills export <name>  # dump as TOML (for sharing/backup)
 precc skills edit <name>    # open in $EDITOR and reimport on save
 
-# View savings report
-precc report
+# View unified savings report (all sources)
+precc savings
 ```
 
 ## What It Does
@@ -62,6 +62,7 @@ precc report
 - **Compresses CLI output** — Rewrites commands to use [RTK](https://github.com/rtk-ai/rtk) for 60-90% smaller output, reducing context growth
 - **Suggests GDB debugging** — When a command fails repeatedly, suggests `precc debug` instead of edit-compile-retry cycles
 - **AST-driven semantic code search** — Integrates [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) for semantic search that understands code structure across 28+ languages, saving 70% tokens vs raw grep
+- **Context file compression** — Strips filler words from CLAUDE.md and memory files using [token-saver](https://clawhub.ai/skills/token-saver) patterns, reducing tokens loaded on every API call
 
 ## Security
 
@@ -111,6 +112,24 @@ View savings with:
 precc-ccc-savings.sh
 # or via plugin command:
 precc ccc-savings
+```
+
+## Context File Compression (token-saver)
+
+PRECC includes a context file compressor adapted from [token-saver](https://clawhub.ai/skills/token-saver) that strips filler words and verbose phrasing from always-loaded files like CLAUDE.md. Since these files are sent with every API call, even small reductions compound quickly.
+
+```bash
+# Preview what would change
+node precc-ts-compress.js --dry-run
+
+# Compress context files (backups saved as *.backup)
+node precc-ts-compress.js
+
+# Revert to originals
+node precc-ts-compress.js --revert
+
+# View compression savings
+precc-ts-savings.sh
 ```
 
 ## Requirements
