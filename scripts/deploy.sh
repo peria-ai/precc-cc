@@ -225,7 +225,7 @@ gh release create "${VERSION}" \
 echo "==> Step 6: Committing and pushing private repo..."
 git commit -am "deployed ${VERSION}" || echo "(nothing to commit)"
 git push origin master
-git push origin demo
+git push origin demo 2>/dev/null || true
 
 echo ""
 echo "Done. PRECC ${VERSION} is live at https://github.com/${PUBLIC_REPO}/releases/tag/${VERSION}"
