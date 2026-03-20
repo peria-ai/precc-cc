@@ -47,39 +47,98 @@ sed -i "s/^version = \".*\"/version = \"${BARE_VERSION}\"/" Cargo.toml
 echo "==> Bumped Cargo.toml version to ${BARE_VERSION}"
 
 # ---------------------------------------------------------------------------
-# Step 1: Sync public files via deploy-demo
+# Step 1: Sync public files via deploy.toml mappings
 # ---------------------------------------------------------------------------
 echo "==> Step 1: Syncing public repo..."
 cd "$REPO_DIR"
-../precc/target/release/deploy-demo --config deploy.toml
+
+DEMO_DIR="$(grep '^demo_dir' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
+DEMO_REPO="$(grep '^demo_repo' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
+DEMO_BRANCH="$(grep '^remote_branch' deploy.toml | sed 's/.*= *"\(.*\)"/\1/')"
+
+# Clone or update the public repo
+if [[ ! -d "$DEMO_DIR/.git" ]]; then
+    git clone "$DEMO_REPO" "$DEMO_DIR"
+fi
+cd "$DEMO_DIR"
+git checkout "$DEMO_BRANCH" 2>/dev/null || git checkout -b "$DEMO_BRANCH"
+git pull origin "$DEMO_BRANCH" --rebase 2>/dev/null || true
+cd "$REPO_DIR"
+
+# Copy mapped files from private → public repo
+while IFS='=' read -r src dst; do
+    # Strip quotes and whitespace from TOML key=value pairs
+    src="$(echo "$src" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')"
+    dst="$(echo "$dst" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')"
+    [[ -z "$src" || "$src" == "["* || "$src" == "#"* ]] && continue
+    [[ "$src" == *"="* ]] && continue  # skip non-mapping lines
+
+    if [[ -f "$src" ]]; then
+        mkdir -p "$DEMO_DIR/$(dirname "$dst")"
+        cp "$src" "$DEMO_DIR/$dst"
+        echo "  $src → $dst"
+    else
+        echo "  (skipped missing: $src)"
+    fi
+done < <(sed -n '/^\[mappings\]/,/^\[/p' deploy.toml | grep -v '^\[')
+
+# Commit and push the public repo
+cd "$DEMO_DIR"
+git add -A
+git diff --cached --quiet && echo "  (no changes to sync)" || \
+    git commit -m "Update to ${VERSION}"
+git push origin "$DEMO_BRANCH"
+cd "$REPO_DIR"
 
 # ---------------------------------------------------------------------------
-# Step 2: Build Linux binaries (zigbuild, glibc 2.17 compatible)
+# Step 2: Build binaries
 # ---------------------------------------------------------------------------
-echo "==> Step 2a: Building Linux binaries..."
 # PRECC_LICENSE_SECRET is baked into the binary at compile time via option_env!().
 # Set it via the environment before calling this script, e.g.:
 #   PRECC_LICENSE_SECRET=<secret> bash scripts/deploy.sh v0.2.0
 # If not set, builds fall back to the public default (community/open builds only).
-PRECC_LICENSE_SECRET="${PRECC_LICENSE_SECRET:-}" \
-cargo zigbuild --release \
-    -p precc-hook \
-    -p precc-cli \
-    -p precc-miner \
-    --target x86_64-unknown-linux-gnu.2.17 \
-    --target aarch64-unknown-linux-gnu.2.17
 
-# ---------------------------------------------------------------------------
-# Step 2b: Build macOS binaries (osxcross via Docker)
-# ---------------------------------------------------------------------------
+LINUX_TARGETS=()
+MACOS_TARGETS=()
+
+# Step 2a: Build Linux binaries
+if command -v cargo-zigbuild &>/dev/null; then
+    echo "==> Step 2a: Building Linux binaries (zigbuild, glibc 2.17)..."
+    PRECC_LICENSE_SECRET="${PRECC_LICENSE_SECRET:-}" \
+    cargo zigbuild --release \
+        -p precc-hook \
+        -p precc-cli \
+        -p precc-miner \
+        --target x86_64-unknown-linux-gnu.2.17 \
+        --target aarch64-unknown-linux-gnu.2.17
+    LINUX_TARGETS+=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
+else
+    echo "==> Step 2a: Building native Linux binary (cargo-zigbuild not found)..."
+    PRECC_LICENSE_SECRET="${PRECC_LICENSE_SECRET:-}" \
+    cargo build --release \
+        -p precc-hook \
+        -p precc-cli \
+        -p precc-miner
+    # Native build puts binaries in target/release/, symlink to target/<triple>/release/
+    NATIVE_TARGET="$(rustc -vV | grep host | sed 's/host: //')"
+    mkdir -p "target/${NATIVE_TARGET}/release"
+    for bin in precc precc-hook precc-miner; do
+        if [[ -f "target/release/${bin}" ]]; then
+            cp "target/release/${bin}" "target/${NATIVE_TARGET}/release/${bin}"
+        fi
+    done
+    LINUX_TARGETS+=("${NATIVE_TARGET}")
+fi
+
+# Step 2b: Build macOS binaries (osxcross via Docker, skipped if unavailable)
 DOCKER_IMAGE="joseluisq/rust-linux-darwin-builder:latest"
 OSXCROSS_BIN="/usr/local/osxcross/target/bin"
 CARGO_BIN="/root/.cargo/bin"
 
 build_macos() {
     local TARGET="$1"
-    local TRIPLE="${TARGET//-/_}"           # e.g. x86_64_apple_darwin
-    local DARWIN_TRIPLE="${TARGET/x86_64/x86_64}-apple-darwin22.4"
+    local TRIPLE="${TARGET//-/_}"
+    local DARWIN_TRIPLE
     if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
         DARWIN_TRIPLE="aarch64-apple-darwin22.4"
     else
@@ -99,10 +158,15 @@ build_macos() {
         -e OPENSSL_BUILD_RANLIB=${DARWIN_TRIPLE}-ranlib \
         ${DOCKER_IMAGE} \
         sh -c 'cargo build --release -p precc-hook -p precc-cli -p precc-miner --target ${TARGET} 2>&1 | tail -5'"
+    MACOS_TARGETS+=("$TARGET")
 }
 
-build_macos "x86_64-apple-darwin"
-build_macos "aarch64-apple-darwin"
+if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+    build_macos "x86_64-apple-darwin"
+    build_macos "aarch64-apple-darwin"
+else
+    echo "==> Step 2b: Skipping macOS builds (Docker not available)"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: Package archives
@@ -110,8 +174,9 @@ build_macos "aarch64-apple-darwin"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 ASSETS=()
+ALL_TARGETS=("${LINUX_TARGETS[@]}" "${MACOS_TARGETS[@]}")
 
-for TARGET in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+for TARGET in "${ALL_TARGETS[@]}"; do
     STAGING="precc-${VERSION}-${TARGET}"
     ARCHIVE="${STAGING}.tar.gz"
     echo "==> Step 3: Packaging ${ARCHIVE}..."
