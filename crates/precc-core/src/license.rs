@@ -132,7 +132,7 @@ pub fn tier() -> Tier {
 pub fn require_paid(feature: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{feature} requires a PRECC Pro (or higher) license.\n\
-         Activate:  precc license activate <gumroad-key>\n\
+         Activate:  precc license activate <gumroad-or-stripe-key>\n\
          Buy a key: https://github.com/yijunyu/precc-cc#pricing"
     )
 }
@@ -234,6 +234,16 @@ pub fn load() -> Result<Option<License>> {
 
     // Gumroad keys: stored as "GR:<key>" — trusted after first online verification
     if is_gumroad_key(key) {
+        return Ok(Some(License {
+            machine_tag: [0; 4],
+            expiry_days: 0,
+            edition_flags: 1, // Pro
+            machine_bound: false,
+        }));
+    }
+
+    // Stripe keys: stored as "ST:<key>" — trusted after first online verification
+    if is_stored_stripe_key(key) {
         return Ok(Some(License {
             machine_tag: [0; 4],
             expiry_days: 0,
@@ -344,6 +354,89 @@ pub fn activate_gumroad(key: &str) -> Result<License> {
 /// Check if a stored key is a Gumroad key (prefixed with "GR:").
 fn is_gumroad_key(key: &str) -> bool {
     key.starts_with("GR:")
+}
+
+// =============================================================================
+// Stripe license verification
+// =============================================================================
+
+/// Stripe secret key, set via PRECC_STRIPE_SECRET_KEY env at build time.
+const STRIPE_SECRET_KEY: &str = match option_env!("PRECC_STRIPE_SECRET_KEY") {
+    Some(s) => s,
+    None => "",
+};
+
+/// Check if a key looks like a Stripe key (cs_*, sub_*, pi_*).
+pub fn is_stripe_key(key: &str) -> bool {
+    let k = key.trim();
+    k.starts_with("cs_") || k.starts_with("sub_") || k.starts_with("pi_")
+}
+
+/// Check if a stored key is a Stripe key (prefixed with "ST:").
+fn is_stored_stripe_key(key: &str) -> bool {
+    key.starts_with("ST:")
+}
+
+/// Verify a Stripe checkout/subscription/payment-intent and activate if valid.
+///
+/// Calls Stripe API to retrieve the object and check its status.
+/// On success, stores the key locally prefixed with "ST:" so subsequent loads
+/// don't need network access.
+pub fn activate_stripe(key: &str) -> Result<License> {
+    let key = key.trim();
+
+    if STRIPE_SECRET_KEY.is_empty() {
+        bail!("Stripe secret key not configured in this build");
+    }
+
+    // Determine the Stripe API endpoint based on key prefix
+    let url = if key.starts_with("cs_") {
+        format!("https://api.stripe.com/v1/checkout/sessions/{}", key)
+    } else if key.starts_with("sub_") {
+        format!("https://api.stripe.com/v1/subscriptions/{}", key)
+    } else if key.starts_with("pi_") {
+        format!("https://api.stripe.com/v1/payment_intents/{}", key)
+    } else {
+        bail!("Unrecognized Stripe key format: {key}");
+    };
+
+    let resp = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {}", STRIPE_SECRET_KEY))
+        .call()
+        .map_err(|e| anyhow::anyhow!("Stripe verification failed: {e}"))?;
+
+    let body: serde_json::Value = resp
+        .into_json()
+        .map_err(|e| anyhow::anyhow!("Failed to parse Stripe response: {e}"))?;
+
+    // Check payment status based on object type
+    let status = body["status"].as_str().unwrap_or("");
+    let valid = if key.starts_with("cs_") {
+        status == "complete"
+    } else if key.starts_with("sub_") {
+        status == "active" || status == "trialing"
+    } else {
+        // pi_*
+        status == "succeeded"
+    };
+
+    if !valid {
+        bail!("Stripe payment not valid (status: {status})");
+    }
+
+    // Store as a Stripe key
+    let path = license_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, format!("ST:{key}\n"))?;
+
+    Ok(License {
+        machine_tag: [0; 4],
+        expiry_days: 0,
+        edition_flags: 1, // Pro
+        machine_bound: false,
+    })
 }
 
 /// Deactivate: remove the stored license key.
@@ -550,5 +643,46 @@ mod tests {
         for part in &parts[1..] {
             assert_eq!(part.len(), 8);
         }
+    }
+
+    // =========================================================================
+    // Stripe key detection
+    // =========================================================================
+
+    #[test]
+    fn is_stripe_key_checkout_session() {
+        assert!(is_stripe_key("cs_test_abc123"));
+        assert!(is_stripe_key("cs_live_xyz"));
+    }
+
+    #[test]
+    fn is_stripe_key_subscription() {
+        assert!(is_stripe_key("sub_1234567890"));
+    }
+
+    #[test]
+    fn is_stripe_key_payment_intent() {
+        assert!(is_stripe_key("pi_3abc"));
+    }
+
+    #[test]
+    fn is_stripe_key_rejects_other() {
+        assert!(!is_stripe_key("PRECC-DEADBEEF-00000000-00000001-AABBCCDD"));
+        assert!(!is_stripe_key("random_key"));
+        assert!(!is_stripe_key(""));
+    }
+
+    #[test]
+    fn is_stored_stripe_key_works() {
+        assert!(is_stored_stripe_key("ST:cs_test_abc"));
+        assert!(!is_stored_stripe_key("GR:abc"));
+        assert!(!is_stored_stripe_key("cs_test_abc"));
+    }
+
+    #[test]
+    fn is_gumroad_key_works() {
+        assert!(is_gumroad_key("GR:abc123"));
+        assert!(!is_gumroad_key("ST:abc"));
+        assert!(!is_gumroad_key("abc"));
     }
 }

@@ -8,6 +8,7 @@ pub mod consent;
 pub mod context;
 pub mod db;
 pub mod gdb;
+pub mod gha;
 pub mod grep_filter;
 pub mod license;
 pub mod metrics;

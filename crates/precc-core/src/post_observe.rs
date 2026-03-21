@@ -101,6 +101,22 @@ pub fn append_observation(
         .and_then(|mut f| f.write_all(line.as_bytes()));
 }
 
+/// Context window usage percentage above which we flag pressure.
+const CONTEXT_PRESSURE_THRESHOLD: u64 = 85;
+
+/// Extract context_window.used_percentage from the hook input JSON.
+pub fn context_used_pct(hook_input: &Value) -> Option<u64> {
+    hook_input
+        .get("context_window")
+        .and_then(|cw| cw.get("used_percentage"))
+        .and_then(|v| v.as_u64())
+}
+
+/// Returns true when context usage exceeds the pressure threshold.
+pub fn is_context_pressure(used_pct: u64) -> bool {
+    used_pct >= CONTEXT_PRESSURE_THRESHOLD
+}
+
 /// Result of analyzing a PostToolUse event.
 pub struct WasteReport {
     /// Number of times this command has been seen (Some(n) if duplicate, n >= 2)
@@ -111,12 +127,16 @@ pub struct WasteReport {
     pub estimated_tokens: u64,
     /// Raw byte count of the tool response
     pub output_bytes: u64,
+    /// Context window usage percentage (if available)
+    pub context_used_pct: Option<u64>,
 }
 
 impl WasteReport {
     /// Whether any waste was detected.
     pub fn has_waste(&self) -> bool {
-        self.duplicate_count.is_some() || self.is_large
+        self.duplicate_count.is_some()
+            || self.is_large
+            || self.context_used_pct.map_or(false, is_context_pressure)
     }
 
     /// Generate advisory context for Claude when waste is detected.
@@ -139,6 +159,15 @@ impl WasteReport {
                 "large output (~{} tokens) — consider using filters or limits to reduce output size",
                 self.estimated_tokens
             ));
+        }
+
+        if let Some(pct) = self.context_used_pct {
+            if is_context_pressure(pct) {
+                parts.push(format!(
+                    "context window {}% full — consider running /compact or starting a new session",
+                    pct
+                ));
+            }
         }
 
         Some(format!("[precc] {}", parts.join("; ")))
@@ -311,6 +340,7 @@ mod tests {
             is_large: false,
             estimated_tokens: 100,
             output_bytes: 400,
+            context_used_pct: None,
         };
         assert!(!report.has_waste());
         assert!(report.advisory_context("Bash").is_none());
@@ -323,6 +353,7 @@ mod tests {
             is_large: false,
             estimated_tokens: 100,
             output_bytes: 400,
+            context_used_pct: None,
         };
         assert!(report.has_waste());
         let ctx = report.advisory_context("Bash").unwrap();
@@ -337,6 +368,7 @@ mod tests {
             is_large: true,
             estimated_tokens: 15_000,
             output_bytes: 60_000,
+            context_used_pct: None,
         };
         assert!(report.has_waste());
         let ctx = report.advisory_context("Bash").unwrap();
@@ -351,6 +383,7 @@ mod tests {
             is_large: true,
             estimated_tokens: 20_000,
             output_bytes: 80_000,
+            context_used_pct: None,
         };
         assert!(report.has_waste());
         let ctx = report.advisory_context("Bash").unwrap();
@@ -365,8 +398,64 @@ mod tests {
             is_large: false,
             estimated_tokens: 100,
             output_bytes: 400,
+            context_used_pct: None,
         };
         let ctx = report.advisory_context("Read").unwrap();
         assert!(ctx.contains("Read"));
+    }
+
+    // =========================================================================
+    // Context pressure
+    // =========================================================================
+
+    #[test]
+    fn context_pressure_below_threshold() {
+        assert!(!is_context_pressure(50));
+        assert!(!is_context_pressure(84));
+    }
+
+    #[test]
+    fn context_pressure_at_threshold() {
+        assert!(is_context_pressure(85));
+        assert!(is_context_pressure(100));
+    }
+
+    #[test]
+    fn context_used_pct_from_json() {
+        let input = json!({"context_window": {"used_percentage": 92}});
+        assert_eq!(context_used_pct(&input), Some(92));
+    }
+
+    #[test]
+    fn context_used_pct_missing() {
+        let input = json!({"tool_name": "Bash"});
+        assert_eq!(context_used_pct(&input), None);
+    }
+
+    #[test]
+    fn waste_report_context_pressure() {
+        let report = WasteReport {
+            duplicate_count: None,
+            is_large: false,
+            estimated_tokens: 100,
+            output_bytes: 400,
+            context_used_pct: Some(90),
+        };
+        assert!(report.has_waste());
+        let ctx = report.advisory_context("Bash").unwrap();
+        assert!(ctx.contains("90%"));
+        assert!(ctx.contains("/compact"));
+    }
+
+    #[test]
+    fn waste_report_no_pressure_at_low_context() {
+        let report = WasteReport {
+            duplicate_count: None,
+            is_large: false,
+            estimated_tokens: 100,
+            output_bytes: 400,
+            context_used_pct: Some(50),
+        };
+        assert!(!report.has_waste());
     }
 }

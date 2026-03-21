@@ -10,8 +10,8 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use precc_core::{
-    advisor, compress, consent, db, gdb, license, metrics, mining, promote, rtk, sharing, skills,
-    telemetry, update_check,
+    advisor, compress, consent, db, gdb, gha, license, metrics, mining, promote, rtk, sharing,
+    skills, telemetry, update_check,
 };
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
@@ -84,6 +84,11 @@ enum Commands {
         length: String,
         /// Expected user inputs (quoted strings, piped to script stdin)
         inputs: Vec<String>,
+    },
+    /// Analyze a failed GitHub Actions run
+    Gha {
+        /// GitHub Actions URL (e.g. https://github.com/owner/repo/actions/runs/123)
+        url: String,
     },
     /// Manage PRECC license key
     License {
@@ -257,6 +262,7 @@ fn main() -> Result<()> {
             }
             gif::cmd_gif(script, length, inputs)
         }
+        Some(Commands::Gha { url }) => cmd_gha(url),
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
         Some(Commands::Update {
@@ -2088,6 +2094,16 @@ fn cmd_compress(dry_run: bool, revert: bool, dir: Option<String>) -> Result<()> 
 }
 
 // =============================================================================
+// GHA (GitHub Actions analysis)
+// =============================================================================
+
+fn cmd_gha(url: String) -> Result<()> {
+    let diagnosis = gha::analyze(&url)?;
+    println!("{}", serde_json::to_string_pretty(&diagnosis)?);
+    Ok(())
+}
+
+// =============================================================================
 // License
 // =============================================================================
 
@@ -2101,6 +2117,9 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
                 } else {
                     license::activate(&key)?
                 }
+            } else if license::is_stripe_key(&key) {
+                // Stripe key — verify online
+                license::activate_stripe(&key)?
             } else {
                 // Gumroad key — verify online
                 license::activate_gumroad(&key)?

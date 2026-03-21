@@ -14,7 +14,7 @@ pub struct GhaUrl {
 }
 
 /// Diagnosis of a GitHub Actions failure.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct GhaDiagnosis {
     /// The workflow run URL
     pub url: String,

@@ -543,12 +543,16 @@ fn run_post_observe(
         estimated_tokens,
     );
 
+    // Extract context pressure
+    let context_used_pct = post_observe::context_used_pct(hook_input);
+
     // Build waste report
     let report = post_observe::WasteReport {
         duplicate_count,
         is_large,
         estimated_tokens,
         output_bytes,
+        context_used_pct,
     };
 
     // Emit additionalContext if waste detected
