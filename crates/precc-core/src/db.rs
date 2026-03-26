@@ -236,6 +236,14 @@ fn init_heuristics_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_triggers_pattern ON skill_triggers(pattern);\
         CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);"
     ))?;
+
+    // Additive migration: claude_interaction column for geofence skill filtering.
+    // 0 = no/unknown (default), 1 = directly calls Claude/Anthropic API,
+    // 2 = indirectly calls Claude (e.g., via a wrapper or MCP server).
+    // Silently ignore if column already exists.
+    let _ =
+        conn.execute_batch("ALTER TABLE skills ADD COLUMN claude_interaction INTEGER DEFAULT 0;");
+
     Ok(())
 }
 

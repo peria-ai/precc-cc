@@ -10,8 +10,8 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use precc_core::{
-    advisor, compress, consent, db, gdb, gha, license, metrics, mining, promote, rtk, sharing,
-    skills, telemetry, update_check,
+    advisor, compress, consent, db, gdb, geofence, gha, license, metrics, mining, promote, rtk,
+    sharing, skills, telemetry, update_check,
 };
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
@@ -119,6 +119,23 @@ enum Commands {
         #[command(subcommand)]
         action: TelemetryAction,
     },
+    /// IP geofence compliance guard (Pro)
+    Geofence {
+        #[command(subcommand)]
+        action: GeofenceAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum GeofenceAction {
+    /// Check current geofence status (reads cached result)
+    Check,
+    /// Refresh the geofence cache (probes IP geolocation API)
+    Refresh,
+    /// Clear the geofence cache
+    Clear,
+    /// Show blocked regions and alternative LLM providers
+    Info,
 }
 
 #[derive(clap::Subcommand)]
@@ -272,6 +289,7 @@ fn main() -> Result<()> {
         }) => cmd_update(force, version, auto),
         Some(Commands::CacheHint) => cmd_cache_hint(),
         Some(Commands::Telemetry { action }) => cmd_telemetry(action),
+        Some(Commands::Geofence { action }) => cmd_geofence(action),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -2335,6 +2353,81 @@ fn cmd_telemetry(action: TelemetryAction) -> Result<()> {
             println!("Telemetry payload preview (this is exactly what would be sent):");
             println!();
             println!("{json}");
+            Ok(())
+        }
+    }
+}
+
+// =============================================================================
+// Geofence
+// =============================================================================
+
+fn cmd_geofence(action: GeofenceAction) -> Result<()> {
+    if !license::tier().is_paid() {
+        return Err(license::require_paid("Geofence compliance guard"));
+    }
+
+    match action {
+        GeofenceAction::Check => {
+            match geofence::read_cache()? {
+                Some(cache) => {
+                    println!("Geofence status:");
+                    println!("  IP:      {}", cache.ip);
+                    println!("  Country: {} ({})", cache.country_name, cache.country_code);
+                    if cache.blocked {
+                        println!("  Status:  BLOCKED");
+                        println!();
+                        println!("{}", geofence::format_deny_message(&cache));
+                    } else {
+                        println!("  Status:  OK (allowed region)");
+                    }
+                    let age = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        .saturating_sub(cache.timestamp);
+                    println!("  Age:     {}s ago", age);
+                }
+                None => {
+                    println!("No geofence cache found.");
+                    println!("Run `precc geofence refresh` to probe your IP.");
+                }
+            }
+            Ok(())
+        }
+        GeofenceAction::Refresh => {
+            println!("Probing IP geolocation...");
+            let cache = geofence::refresh_cache()?;
+            println!("  IP:      {}", cache.ip);
+            println!("  Country: {} ({})", cache.country_name, cache.country_code);
+            if cache.blocked {
+                println!("  Status:  BLOCKED");
+                println!();
+                println!("{}", geofence::format_deny_message(&cache));
+            } else {
+                println!("  Status:  OK (allowed region)");
+            }
+            println!("Cache updated.");
+            Ok(())
+        }
+        GeofenceAction::Clear => {
+            geofence::clear_cache()?;
+            println!("Geofence cache cleared.");
+            Ok(())
+        }
+        GeofenceAction::Info => {
+            println!("Blocked regions (Anthropic API restricted):");
+            for code in geofence::blocked_countries() {
+                println!("  {code}");
+            }
+            println!();
+            println!("Alternative LLM providers for blocked regions:");
+            for alt in geofence::ALTERNATIVES {
+                println!("  {} ({}) — {}", alt.name, alt.provider, alt.notes);
+                println!("    API: {}", alt.api_url);
+            }
+            println!();
+            println!("Override: set PRECC_GEOFENCE_OVERRIDE=1 to bypass (at your own risk)");
             Ok(())
         }
     }

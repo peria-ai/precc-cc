@@ -8,6 +8,7 @@ pub mod consent;
 pub mod context;
 pub mod db;
 pub mod gdb;
+pub mod geofence;
 pub mod gha;
 pub mod grep_filter;
 pub mod license;

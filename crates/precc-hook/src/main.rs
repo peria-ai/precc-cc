@@ -21,8 +21,8 @@
 //! - Schema init skipped (precc init handles it)
 
 use precc_core::{
-    agent_propagate, ccc, context, db, grep_filter, license, post_observe, read_filter, rtk,
-    skills, update_check,
+    agent_propagate, ccc, context, db, geofence, grep_filter, license, post_observe, read_filter,
+    rtk, skills, update_check,
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -305,6 +305,18 @@ fn run_bash_pipeline(
     // Run pipeline
     let mut pipeline = Pipeline::new(command, cwd);
     pipeline.run();
+
+    // Geofence block: deny the command entirely with a helpful message
+    if pipeline.had_geofence_block {
+        if let geofence::GeofenceVerdict::Blocked(cache) = geofence::check_cached() {
+            let msg = geofence::format_deny_message(&cache);
+            emit_deny(&msg)?;
+
+            let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+            append_metrics_log_bash(&pipeline, latency_ms);
+            return Ok(());
+        }
+    }
 
     // Emit when command was rewritten OR when there's a GDB suggestion to surface.
     if pipeline.modified() || pipeline.had_gdb_suggestion {
@@ -631,6 +643,7 @@ struct Pipeline {
     cwd: String,
     reasons: Vec<String>,
     // Flags set by each stage for metrics reporting
+    had_geofence_block: bool,
     had_cd_prepend: bool,
     had_rtk_rewrite: bool,
     had_gdb_suggestion: bool,
@@ -645,6 +658,7 @@ impl Pipeline {
             command,
             cwd,
             reasons: Vec::new(),
+            had_geofence_block: false,
             had_cd_prepend: false,
             had_rtk_rewrite: false,
             had_gdb_suggestion: false,
@@ -666,6 +680,11 @@ impl Pipeline {
     }
 
     fn run(&mut self) {
+        // Stage 0: Geofence check (Pro feature) — blocks if IP is in restricted region
+        if self.stage_geofence() {
+            return; // Blocked — skip all subsequent stages
+        }
+
         // Stage 2: Skill matching (Pillar 4) — read-only, skip if no DB
         self.stage_skills();
 
@@ -680,6 +699,41 @@ impl Pipeline {
 
         // Stage 6: CCC semantic search redirect (Pillar 2b)
         self.stage_ccc();
+    }
+
+    /// Stage 0: Geofence — IP region compliance check (Pro feature).
+    ///
+    /// Reads the cached geofence result (<1ms). If the user's egress IP is
+    /// in a blocked region, returns `true` to halt the pipeline. The caller
+    /// should emit a deny with the formatted message.
+    ///
+    /// Skipped for Free-tier users (feature gated to Pro+).
+    /// Skipped if `PRECC_GEOFENCE_OVERRIDE=1` is set.
+    fn stage_geofence(&mut self) -> bool {
+        // Pro feature gate — free users are silently skipped
+        if !license::tier().is_paid() {
+            return false;
+        }
+
+        // Allow override for users who accept the risk
+        if geofence::is_overridden() {
+            return false;
+        }
+
+        match geofence::check_cached() {
+            geofence::GeofenceVerdict::Blocked(cache) => {
+                self.had_geofence_block = true;
+                self.reasons
+                    .push(format!("geofence-block:{}", cache.country_code));
+                true
+            }
+            geofence::GeofenceVerdict::Stale => {
+                // Stale cache — warn but don't block
+                eprintln!("{}", geofence::format_stale_warning());
+                false
+            }
+            geofence::GeofenceVerdict::Allow => false,
+        }
     }
 
     /// Stage 2: Query heuristics.db for matching skills (read-only).
@@ -719,6 +773,27 @@ impl Pipeline {
                 } else {
                     mined_seen += 1;
                     mined_seen <= precc_core::FREE_SKILL_LIMIT
+                }
+            });
+        }
+
+        // Geofence skill filter: suppress 3rd-party skills that interact with
+        // Claude/Anthropic API when the user is in a blocked region.
+        // This prevents indirect API calls that could trigger account bans.
+        let geofence_active = matches!(
+            geofence::check_cached(),
+            geofence::GeofenceVerdict::Blocked(_)
+        );
+        if geofence_active {
+            matches.retain(|m| {
+                if m.claude_interaction > 0 {
+                    self.reasons.push(format!(
+                        "geofence-skip-skill:{} (claude_interaction={})",
+                        m.skill_name, m.claude_interaction
+                    ));
+                    false
+                } else {
+                    true
                 }
             });
         }
@@ -984,6 +1059,12 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
         "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3}}}\n",
         ts, latency_ms
     );
+    if pipeline.had_geofence_block {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"geofence_block\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
     if pipeline.had_cd_prepend {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"cd_prepend\",\"value\":1.0}}\n",

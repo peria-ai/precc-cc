@@ -18,6 +18,9 @@ pub struct SkillMatch {
     pub skill_id: i64,
     /// "builtin" or "mined" — used for tier-based gating.
     pub source: String,
+    /// Whether this skill interacts with Claude/Anthropic API.
+    /// 0 = no/unknown, 1 = direct, 2 = indirect.
+    pub claude_interaction: i32,
 }
 
 /// Query heuristics.db for skills matching the given command.
@@ -31,7 +34,8 @@ pub fn find_matches(
 ) -> Result<Vec<SkillMatch>> {
     // Get all enabled skills with command_regex triggers
     let mut stmt = conn.prepare_cached(
-        "SELECT s.id, s.name, s.source, t.pattern, t.weight, a.action_type, a.template, a.confidence
+        "SELECT s.id, s.name, s.source, t.pattern, t.weight, a.action_type, a.template, a.confidence,
+                COALESCE(s.claude_interaction, 0)
          FROM skills s
          JOIN skill_triggers t ON t.skill_id = s.id
          JOIN skill_actions a ON a.skill_id = s.id
@@ -51,6 +55,7 @@ pub fn find_matches(
             action_type: row.get(5)?,
             template: row.get(6)?,
             confidence: row.get(7)?,
+            claude_interaction: row.get(8)?,
         })
     })?;
 
@@ -70,6 +75,7 @@ pub fn find_matches(
                         template: row.template,
                         confidence: row.confidence * row.weight,
                         skill_id: row.skill_id,
+                        claude_interaction: row.claude_interaction,
                     });
                 }
             }
@@ -90,6 +96,7 @@ struct CandidateRow {
     action_type: String,
     template: String,
     confidence: f64,
+    claude_interaction: i32,
 }
 
 /// Check file_exists triggers for a skill.
