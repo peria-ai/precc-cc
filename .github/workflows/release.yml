@@ -1,130 +1,36 @@
 name: Release
 
+# Triggered when a version tag is pushed to the private repo.
+# Delegates the actual build to the PUBLIC repo's build-release.yml
+# workflow, which runs on free CI runners and clones private source
+# via PRIVATE_SOURCE_TOKEN.
+
 on:
   push:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
+env:
+  PUBLIC_REPO: yijunyu/precc-cc
+
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04
-            use_zigbuild: true
-            archive: tar.gz
-
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04
-            use_zigbuild: true
-            archive: tar.gz
-
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            use_zigbuild: false
-            archive: tar.gz
-
-          - target: aarch64-apple-darwin
-            runner: macos-14
-            use_zigbuild: false
-            archive: tar.gz
-
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2022
-            use_zigbuild: false
-            archive: zip
-
+  trigger-public-build:
+    name: Trigger public repo build
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      # ---- Linux: zigbuild for glibc 2.17 compatibility ----
-      - name: Install cargo-zigbuild (Linux)
-        if: matrix.use_zigbuild
-        run: |
-          pip3 install ziglang
-          cargo install cargo-zigbuild
-
-      # ---- macOS: OpenSSL (required by SQLCipher amalgamation) ----
-      - name: Install OpenSSL (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install openssl@3
-          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
-          echo "OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib" >> "$GITHUB_ENV"
-          echo "OPENSSL_INCLUDE_DIR=$(brew --prefix openssl@3)/include" >> "$GITHUB_ENV"
-
-      # ---- Windows: vcpkg OpenSSL static ----
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          vcpkg install openssl:x64-windows-static
-          echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static" >> $env:GITHUB_ENV
-          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
-
-      # ---- Build (Linux via zigbuild — targets glibc 2.17+) ----
-      - name: Build (zigbuild)
-        if: matrix.use_zigbuild
-        run: |
-          cargo zigbuild --release \
-            -p precc-hook \
-            -p precc-cli \
-            -p precc-miner \
-            --target ${{ matrix.target }}.2.17
-
-      # ---- Build (cargo — macOS / Windows) ----
-      - name: Build (cargo)
-        if: '!matrix.use_zigbuild'
-        run: |
-          cargo build --release \
-            -p precc-hook \
-            -p precc-cli \
-            -p precc-miner \
-            --target ${{ matrix.target }}
-
-      # ---- Package (Linux / macOS) ----
-      - name: Package (tar.gz)
-        if: matrix.archive == 'tar.gz'
-        shell: bash
+      - name: Trigger build-release on public repo
+        env:
+          PRECC_CC_TOKEN: ${{ secrets.PRECC_CC_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          ARCHIVE="precc-${TAG}-${{ matrix.target }}.tar.gz"
-          STAGING="precc-${TAG}-${{ matrix.target }}"
-          mkdir -p "$STAGING"
-          cp "target/${{ matrix.target }}/release/precc" "$STAGING/"
-          cp "target/${{ matrix.target }}/release/precc-hook" "$STAGING/"
-          cp "target/${{ matrix.target }}/release/precc-miner" "$STAGING/"
-          tar -czf "$ARCHIVE" "$STAGING"
-          echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
-
-      # ---- Package (Windows) ----
-      - name: Package (zip)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          $archive = "precc-$tag-${{ matrix.target }}.zip"
-          $staging = "precc-$tag-${{ matrix.target }}"
-          New-Item -ItemType Directory -Path $staging | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\precc.exe" "$staging\"
-          Copy-Item "target\${{ matrix.target }}\release\precc-hook.exe" "$staging\"
-          Copy-Item "target\${{ matrix.target }}\release\precc-miner.exe" "$staging\"
-          Compress-Archive -Path "$staging\*" -DestinationPath $archive
-          echo "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      # ---- Upload release asset ----
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.ASSET }}
-          repository: yijunyu/precc-cc
-        env:
-          GITHUB_TOKEN: ${{ secrets.PRECC_CC_TOKEN }}
+          curl -fsSL \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${PRECC_CC_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${PUBLIC_REPO}/actions/workflows/build-release.yml/dispatches" \
+            -d "{\"ref\":\"main\",\"inputs\":{\"release_version\":\"${TAG}\"}}"
+          echo "Triggered build-release workflow on ${PUBLIC_REPO} for ${TAG}"
