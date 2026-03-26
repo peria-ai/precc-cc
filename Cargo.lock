@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "precc-cli"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "precc-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "hex",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "precc-hook"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "obfstr",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "precc-miner"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "libc",
