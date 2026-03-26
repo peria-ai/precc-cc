@@ -41,7 +41,7 @@ jobs:
             archive: tar.gz
 
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-14
             use_zigbuild: false
             archive: tar.gz
 
