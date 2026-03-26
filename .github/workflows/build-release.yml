@@ -119,6 +119,7 @@ jobs:
       # ---- Build (cargo — macOS / Windows) ----
       - name: Build (cargo)
         if: '!matrix.use_zigbuild'
+        shell: bash
         env:
           PRECC_LICENSE_SECRET: ${{ secrets.PRECC_LICENSE_SECRET }}
           PRECC_STRIPE_SECRET_KEY: ${{ secrets.PRECC_STRIPE_SECRET_KEY }}
