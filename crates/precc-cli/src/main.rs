@@ -10,8 +10,8 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use precc_core::{
-    advisor, compress, consent, db, gdb, geofence, gha, license, metrics, mining, promote, rtk,
-    sharing, skills, telemetry, update_check,
+    advisor, compress, consent, db, gdb, geofence, gha, license, metrics, mining, nushell, promote,
+    rtk, sharing, skill_advisor, skills, telemetry, update_check,
 };
 #[allow(unused_imports)] // needed for writeln! on impl Write params
 use std::io::Write;
@@ -124,6 +124,11 @@ enum Commands {
         #[command(subcommand)]
         action: GeofenceAction,
     },
+    /// Experimental nushell integration (alternative to RTK)
+    Nushell {
+        #[command(subcommand)]
+        action: NushellAction,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -136,6 +141,34 @@ enum GeofenceAction {
     Clear,
     /// Show blocked regions and alternative LLM providers
     Info,
+}
+
+#[derive(clap::Subcommand)]
+enum NushellAction {
+    /// Check if nushell is available and show version
+    Check,
+    /// Show nushell translation for a command (dry-run)
+    Translate {
+        /// Bash command to translate
+        command: String,
+    },
+    /// Run benchmark comparing bash vs RTK vs nushell token savings
+    Benchmark {
+        /// Specific command to benchmark (default: run all standard scenarios)
+        #[arg(long)]
+        command: Option<String>,
+        /// Number of iterations per command
+        #[arg(long, default_value = "3")]
+        iterations: u32,
+    },
+    /// List all nushell translation rules
+    Rules,
+    /// Retrospective what-if analysis: compare bash vs RTK vs nushell on historical sessions
+    WhatIf {
+        /// Export results as CSV
+        #[arg(long)]
+        csv: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -222,6 +255,12 @@ enum SkillsAction {
         #[arg(long)]
         share: Option<String>,
     },
+    /// Cluster installed skills by function and recommend token-efficient replacements
+    Cluster {
+        /// Similarity threshold for clustering (0.0-1.0, default 0.3)
+        #[arg(long, default_value = "0.3")]
+        threshold: f64,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -290,6 +329,7 @@ fn main() -> Result<()> {
         Some(Commands::CacheHint) => cmd_cache_hint(),
         Some(Commands::Telemetry { action }) => cmd_telemetry(action),
         Some(Commands::Geofence { action }) => cmd_geofence(action),
+        Some(Commands::Nushell { action }) => cmd_nushell(action),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -397,6 +437,10 @@ fn cmd_init() -> Result<()> {
         (
             "rust-test-slice",
             include_str!("../../../skills/builtin/rust-test-slice.toml"),
+        ),
+        (
+            "block-comment-cmd",
+            include_str!("../../../skills/builtin/block-comment-cmd.toml"),
         ),
     ];
     let loaded = skills::load_builtin_skills_embedded(&heuristics_conn, BUILTIN_SKILLS)?;
@@ -574,6 +618,7 @@ fn cmd_skills(action: Option<SkillsAction>) -> Result<()> {
             accept,
             share,
         }) => cmd_skills_advise(&data_dir, &conn, auto_disable, accept, share),
+        Some(SkillsAction::Cluster { threshold }) => cmd_skills_cluster(threshold),
     }
 }
 
@@ -876,6 +921,144 @@ fn write_skill_toml(
         writeln!(out, "type = {:?}", atype)?;
         writeln!(out, "template = {:?}", template)?;
         writeln!(out, "confidence = {}", confidence)?;
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// precc skills cluster
+// =============================================================================
+
+fn cmd_skills_cluster(threshold: f64) -> Result<()> {
+    println!("Scanning installed skills...");
+    let skills = skill_advisor::scan_installed_skills()?;
+
+    if skills.is_empty() {
+        println!("No installed skills found.");
+        println!("Skills are scanned from:");
+        println!("  ~/.claude/plugins/**/SKILL.md");
+        println!("  ~/.claude/skills/*/SKILL.md");
+        println!("  ./skills/*/SKILL.md (project-local)");
+        return Ok(());
+    }
+
+    println!("Found {} installed skills", skills.len());
+    println!();
+
+    // Show inventory
+    println!(
+        "{:<30} {:>6} {:>8}  {:<35}",
+        "Skill", "Tokens", "Source", "Description"
+    );
+    println!("{}", "-".repeat(90));
+    for s in &skills {
+        let desc = if s.description.chars().count() > 35 {
+            let truncated: String = s.description.chars().take(32).collect();
+            format!("{truncated}...")
+        } else {
+            s.description.clone()
+        };
+        println!(
+            "{:<30} {:>4}t {:>8}  {}",
+            if s.name.len() > 29 {
+                &s.name[..29]
+            } else {
+                &s.name
+            },
+            s.context_tokens,
+            s.source,
+            desc,
+        );
+    }
+    let total_tokens: u64 = skills.iter().map(|s| s.context_tokens).sum();
+    println!();
+    println!("Total context cost: {} tokens/session", total_tokens);
+
+    // Cluster
+    let clusters = skill_advisor::cluster_skills(&skills, threshold);
+
+    if clusters.is_empty() {
+        println!();
+        println!(
+            "No overlapping skill clusters found (threshold={:.1}).",
+            threshold
+        );
+        println!("All installed skills appear to serve distinct functions.");
+        return Ok(());
+    }
+
+    // Scan usage
+    println!();
+    println!("Scanning session logs for usage data...");
+    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+    let usage = skill_advisor::scan_skill_usage(&skill_names)?;
+
+    // Generate recommendations
+    let recs = skill_advisor::recommend(&skills, &clusters, &usage);
+
+    println!();
+    println!(
+        "Skill Clusters ({} clusters with overlapping skills)",
+        clusters.len()
+    );
+    println!("{}", "=".repeat(70));
+
+    for rec in &recs {
+        println!();
+        println!(
+            "Cluster: {} ({} skills, {} context tokens)",
+            rec.cluster_label,
+            1 + rec.remove.len(),
+            rec.keep.context_tokens + rec.remove.iter().map(|r| r.context_tokens).sum::<u64>(),
+        );
+
+        // Keep
+        let u = usage.get(&rec.keep.name);
+        let acts = u.map(|u| u.activations).unwrap_or(0);
+        let rate = u
+            .map(|u| {
+                if u.success_count + u.failure_count > 0 {
+                    format!("{:.0}%", u.success_rate() * 100.0)
+                } else {
+                    "-".to_string()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  {:<28} {:>4}t  {:>3} activations  {} success  <- KEEP",
+            rec.keep.name, rec.keep.context_tokens, acts, rate,
+        );
+
+        // Remove
+        for r in &rec.remove {
+            let u = usage.get(&r.name);
+            let acts = u.map(|u| u.activations).unwrap_or(0);
+            let rate = u
+                .map(|u| {
+                    if u.success_count + u.failure_count > 0 {
+                        format!("{:.0}%", u.success_rate() * 100.0)
+                    } else {
+                        "-".to_string()
+                    }
+                })
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "  {:<28} {:>4}t  {:>3} activations  {} success  -> REMOVE (saves {}t/session)",
+                r.name, r.context_tokens, acts, rate, r.context_tokens,
+            );
+        }
+    }
+
+    let total_savings: u64 = recs.iter().map(|r| r.tokens_saved_per_session).sum();
+    let removable: usize = recs.iter().map(|r| r.remove.len()).sum();
+
+    if total_savings > 0 {
+        println!();
+        println!(
+            "Potential savings: {} tokens/session ({} skills removable)",
+            total_savings, removable,
+        );
     }
 
     Ok(())
@@ -2428,6 +2611,396 @@ fn cmd_geofence(action: GeofenceAction) -> Result<()> {
             }
             println!();
             println!("Override: set PRECC_GEOFENCE_OVERRIDE=1 to bypass (at your own risk)");
+            Ok(())
+        }
+    }
+}
+
+// =============================================================================
+// Nushell
+// =============================================================================
+
+fn cmd_nushell(action: NushellAction) -> Result<()> {
+    match action {
+        NushellAction::Check => {
+            if nushell::nu_available() {
+                // Try to get version
+                let version = std::process::Command::new("nu")
+                    .arg("--version")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .unwrap_or_else(|| "unknown".to_string());
+                println!("Nushell: AVAILABLE (v{})", version.trim());
+                println!(
+                    "Rules:   {} translation rules loaded",
+                    nushell::rule_count()
+                );
+                println!(
+                    "Mode:    {}",
+                    if nushell::nushell_mode_enabled() {
+                        "ENABLED (PRECC_NUSHELL is set)"
+                    } else {
+                        "DISABLED (set PRECC_NUSHELL=1 to enable)"
+                    }
+                );
+            } else {
+                println!("Nushell: NOT FOUND");
+                println!("Install: cargo install nu");
+                println!("         or https://www.nushell.sh/book/installation.html");
+            }
+            Ok(())
+        }
+        NushellAction::Translate { command } => {
+            match nushell::translate_preview(&command) {
+                Some((from, to, baseline, ratio)) => {
+                    println!("Bash:    {}", command);
+                    println!("Nushell: {}", to);
+                    println!("Matched: \"{}\" rule", from);
+                    println!("RTK est: {} tokens saved", baseline);
+                    println!("Nu est:  {:.0}% output reduction", (1.0 - ratio) * 100.0);
+                }
+                None => {
+                    if !nushell::is_nu_safe(&command) {
+                        println!("Command contains bash-specific syntax (not nu-safe)");
+                    } else {
+                        println!("No nushell translation rule for: {}", command);
+                    }
+                    println!("Fallback: RTK rewriting would be used");
+                }
+            }
+            Ok(())
+        }
+        NushellAction::Benchmark {
+            command,
+            iterations,
+        } => {
+            if !nushell::nu_available() {
+                bail!("Nushell is not installed. Install with: cargo install nu");
+            }
+
+            let scenarios: Vec<String> = if let Some(cmd) = command {
+                vec![cmd]
+            } else {
+                // Default benchmark scenarios (commands likely to exist in a dev environment)
+                vec![
+                    "cargo build".to_string(),
+                    "git status".to_string(),
+                    "git log".to_string(),
+                    "git diff".to_string(),
+                    "ls".to_string(),
+                ]
+            };
+
+            println!(
+                "{:<20} {:>8} {:>8} {:>8} {:>7} {:>7}",
+                "Command", "Bash", "RTK", "Nushell", "RTK %", "Nu %"
+            );
+            println!("{}", "-".repeat(70));
+
+            for cmd in &scenarios {
+                let nu_preview = nushell::translate_preview(cmd);
+                let rtk_preview = precc_core::rtk::tokens_saved(cmd);
+
+                let mut bash_tokens = 0u64;
+                let mut nu_tokens = 0u64;
+
+                // Run bash version
+                for _ in 0..iterations {
+                    if let Ok(output) = std::process::Command::new("bash")
+                        .arg("-c")
+                        .arg(cmd)
+                        .output()
+                    {
+                        let text = String::from_utf8_lossy(&output.stdout).to_string()
+                            + &String::from_utf8_lossy(&output.stderr);
+                        bash_tokens += nushell::estimate_tokens(&text) as u64;
+                    }
+                }
+                bash_tokens /= iterations as u64;
+
+                // Run nushell version
+                if let Some((_, nu_cmd, _, _)) = nu_preview {
+                    for _ in 0..iterations {
+                        if let Ok(output) = std::process::Command::new("bash")
+                            .arg("-c")
+                            .arg(nu_cmd)
+                            .output()
+                        {
+                            let text = String::from_utf8_lossy(&output.stdout).to_string()
+                                + &String::from_utf8_lossy(&output.stderr);
+                            nu_tokens += nushell::estimate_tokens(&text) as u64;
+                        }
+                    }
+                    nu_tokens /= iterations as u64;
+                }
+
+                // RTK estimated tokens (bash - estimated savings)
+                let rtk_tokens = bash_tokens.saturating_sub(rtk_preview as u64);
+
+                let rtk_pct = if bash_tokens > 0 {
+                    ((bash_tokens as f64 - rtk_tokens as f64) / bash_tokens as f64 * 100.0) as i32
+                } else {
+                    0
+                };
+                let nu_pct = if bash_tokens > 0 {
+                    ((bash_tokens as f64 - nu_tokens as f64) / bash_tokens as f64 * 100.0) as i32
+                } else {
+                    0
+                };
+
+                let nu_display = if nu_preview.is_some() {
+                    format!("{:>5}t", nu_tokens)
+                } else {
+                    "  n/a".to_string()
+                };
+                let nu_pct_display = if nu_preview.is_some() {
+                    format!("{:>5}%", nu_pct)
+                } else {
+                    "  n/a".to_string()
+                };
+
+                println!(
+                    "{:<20} {:>5}t {:>5}t {} {:>5}% {}",
+                    if cmd.len() > 20 { &cmd[..20] } else { cmd },
+                    bash_tokens,
+                    rtk_tokens,
+                    nu_display,
+                    rtk_pct,
+                    nu_pct_display,
+                );
+            }
+
+            println!();
+            println!("Note: RTK tokens are estimated (bash - RTK est. savings).");
+            println!("      Nushell tokens are measured from actual nu output.");
+            Ok(())
+        }
+        NushellAction::Rules => {
+            println!("{:<25} {:<60} {:>6}", "Match", "Nushell Command", "RTK Δ");
+            println!("{}", "-".repeat(95));
+            for (from, to, baseline, ratio) in nushell::rules_summary() {
+                let to_display = if to.len() > 50 {
+                    format!("{}...", &to[..47])
+                } else {
+                    to.to_string()
+                };
+                println!(
+                    "{:<25} {:<52} {:>5}t {:>4.0}%",
+                    from,
+                    to_display,
+                    baseline,
+                    (1.0 - ratio) * 100.0
+                );
+            }
+            println!();
+            println!("{} rules total", nushell::rule_count());
+            Ok(())
+        }
+        NushellAction::WhatIf { csv } => {
+            println!("Scanning historical session logs...");
+            let analysis = nushell::what_if_analysis()?;
+
+            if analysis.session_count == 0 {
+                println!("No session logs found in ~/.claude/projects/");
+                println!("Run some Claude Code sessions first, then re-run this command.");
+                return Ok(());
+            }
+
+            // Compute totals
+            let mut total = nushell::WhatIfResult::default();
+            for r in analysis.by_category.values() {
+                total.total_commands += r.total_commands;
+                total.bash_tokens += r.bash_tokens;
+                total.rtk_tokens += r.rtk_tokens;
+                total.nushell_tokens += r.nushell_tokens;
+                total.nushell_matched += r.nushell_matched;
+                total.nushell_unmatched += r.nushell_unmatched;
+            }
+
+            if csv {
+                // CSV output
+                println!("Category,Commands,Bash_Tokens,RTK_Tokens,Nushell_Tokens,RTK_Saving_%,Nushell_Saving_%,Nu_Matched,Nu_Unmatched");
+                for cat in nushell::UsageCategory::all() {
+                    let r = analysis.by_category.get(cat).cloned().unwrap_or_default();
+                    if r.total_commands == 0 {
+                        continue;
+                    }
+                    let rtk_pct = if r.bash_tokens > 0 {
+                        (r.bash_tokens as f64 - r.rtk_tokens as f64) / r.bash_tokens as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    let nu_pct = if r.bash_tokens > 0 {
+                        (r.bash_tokens as f64 - r.nushell_tokens as f64) / r.bash_tokens as f64
+                            * 100.0
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "{},{},{},{},{},{:.1},{:.1},{},{}",
+                        cat.name(),
+                        r.total_commands,
+                        r.bash_tokens,
+                        r.rtk_tokens,
+                        r.nushell_tokens,
+                        rtk_pct,
+                        nu_pct,
+                        r.nushell_matched,
+                        r.nushell_unmatched,
+                    );
+                }
+                // Total row
+                let rtk_pct_t = if total.bash_tokens > 0 {
+                    (total.bash_tokens as f64 - total.rtk_tokens as f64) / total.bash_tokens as f64
+                        * 100.0
+                } else {
+                    0.0
+                };
+                let nu_pct_t = if total.bash_tokens > 0 {
+                    (total.bash_tokens as f64 - total.nushell_tokens as f64)
+                        / total.bash_tokens as f64
+                        * 100.0
+                } else {
+                    0.0
+                };
+                println!(
+                    "TOTAL,{},{},{},{},{:.1},{:.1},{},{}",
+                    total.total_commands,
+                    total.bash_tokens,
+                    total.rtk_tokens,
+                    total.nushell_tokens,
+                    rtk_pct_t,
+                    nu_pct_t,
+                    total.nushell_matched,
+                    total.nushell_unmatched,
+                );
+                // Dev sub-breakdown CSV
+                if !analysis.dev_sub.is_empty() {
+                    println!();
+                    println!("Dev_Subcategory,Commands,Bash_Tokens,RTK_Tokens,Nushell_Tokens");
+                    for sub in &analysis.dev_sub {
+                        println!(
+                            "{},{},{},{},{}",
+                            sub.label,
+                            sub.commands,
+                            sub.bash_tokens,
+                            sub.rtk_tokens,
+                            sub.nushell_tokens,
+                        );
+                    }
+                }
+                return Ok(());
+            }
+
+            // Table output
+            println!();
+            println!("PRECC Nushell What-If Analysis");
+            println!("==============================");
+            println!("Historical sessions: {}", analysis.session_count);
+            println!("Total Bash commands: {}", total.total_commands);
+            println!();
+
+            println!(
+                "{:<16} {:>8} {:>10} {:>10} {:>10} {:>6} {:>6}",
+                "Category", "Commands", "Bash Tok", "RTK Tok", "Nu Tok", "RTK %", "Nu %"
+            );
+            println!("{}", "-".repeat(72));
+
+            for cat in nushell::UsageCategory::all() {
+                let r = analysis.by_category.get(cat).cloned().unwrap_or_default();
+                if r.total_commands == 0 {
+                    continue;
+                }
+                let rtk_pct = if r.bash_tokens > 0 {
+                    ((r.bash_tokens as f64 - r.rtk_tokens as f64) / r.bash_tokens as f64 * 100.0)
+                        as i32
+                } else {
+                    0
+                };
+                let nu_pct = if r.bash_tokens > 0 {
+                    ((r.bash_tokens as f64 - r.nushell_tokens as f64) / r.bash_tokens as f64
+                        * 100.0) as i32
+                } else {
+                    0
+                };
+                println!(
+                    "{:<16} {:>8} {:>10} {:>10} {:>10} {:>5}% {:>5}%",
+                    cat.name(),
+                    r.total_commands,
+                    r.bash_tokens,
+                    r.rtk_tokens,
+                    r.nushell_tokens,
+                    rtk_pct,
+                    nu_pct,
+                );
+            }
+
+            println!("{}", "-".repeat(72));
+            let rtk_pct_t = if total.bash_tokens > 0 {
+                ((total.bash_tokens as f64 - total.rtk_tokens as f64) / total.bash_tokens as f64
+                    * 100.0) as i32
+            } else {
+                0
+            };
+            let nu_pct_t = if total.bash_tokens > 0 {
+                ((total.bash_tokens as f64 - total.nushell_tokens as f64)
+                    / total.bash_tokens as f64
+                    * 100.0) as i32
+            } else {
+                0
+            };
+            println!(
+                "{:<16} {:>8} {:>10} {:>10} {:>10} {:>5}% {:>5}%",
+                "TOTAL",
+                total.total_commands,
+                total.bash_tokens,
+                total.rtk_tokens,
+                total.nushell_tokens,
+                rtk_pct_t,
+                nu_pct_t,
+            );
+
+            println!();
+            println!(
+                "Nu coverage: {} matched / {} unmatched ({:.0}% of commands)",
+                total.nushell_matched,
+                total.nushell_unmatched,
+                if total.total_commands > 0 {
+                    total.nushell_matched as f64 / total.total_commands as f64 * 100.0
+                } else {
+                    0.0
+                }
+            );
+
+            // Dev sub-breakdown
+            if !analysis.dev_sub.is_empty() {
+                println!();
+                println!("Software Dev Breakdown:");
+                for sub in &analysis.dev_sub {
+                    if sub.commands == 0 {
+                        continue;
+                    }
+                    let rtk_pct = if sub.bash_tokens > 0 {
+                        ((sub.bash_tokens as f64 - sub.rtk_tokens as f64) / sub.bash_tokens as f64
+                            * 100.0) as i32
+                    } else {
+                        0
+                    };
+                    let nu_pct = if sub.bash_tokens > 0 {
+                        ((sub.bash_tokens as f64 - sub.nushell_tokens as f64)
+                            / sub.bash_tokens as f64
+                            * 100.0) as i32
+                    } else {
+                        0
+                    };
+                    println!(
+                        "  {:<24} {:>5} cmds  RTK:{:>4}%  Nu:{:>4}%",
+                        sub.label, sub.commands, rtk_pct, nu_pct,
+                    );
+                }
+            }
+
             Ok(())
         }
     }

@@ -1,6 +1,6 @@
 # PRECC — Predictive Error Correction for Claude Code
 
-PRECC saves **~34% of Claude Code costs** through three pillars: fixing bash commands before they fail, compressing tool output, and reducing context token usage via semantic search and file compression. Ships as a single Rust binary.
+In a retrospective analysis of 89 real Claude Code sessions (3,078 commands), PRECC saved **2.5x more tokens than RTK alone** — **43% total reduction** vs 17% — by combining output compression with predictive error correction, comment blocking, and bash unwrapping. Ships as a single Rust binary.
 
 ## Install
 

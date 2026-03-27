@@ -1,0 +1,15 @@
+[skill]
+name = "block-comment-cmd"
+description = "Block bash commands that are just comments (# ...) — prevents Claude from executing no-op lines that produce only error output, saving ~160 tokens per occurrence"
+source = "builtin"
+priority = 10
+
+[[triggers]]
+type = "command_regex"
+pattern = '^\s*#'
+weight = 1.0
+
+[[actions]]
+type = "rewrite_command"
+template = "true # skipped comment line"
+confidence = 0.95

@@ -21,8 +21,8 @@
 //! - Schema init skipped (precc init handles it)
 
 use precc_core::{
-    agent_propagate, ccc, context, db, geofence, grep_filter, license, post_observe, read_filter,
-    rtk, skills, update_check,
+    agent_propagate, ccc, context, db, geofence, grep_filter, license, nushell, post_observe,
+    read_filter, rtk, skills, update_check,
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -644,7 +644,9 @@ struct Pipeline {
     reasons: Vec<String>,
     // Flags set by each stage for metrics reporting
     had_geofence_block: bool,
+    had_bash_unwrap: bool,
     had_cd_prepend: bool,
+    had_nushell_wrap: bool,
     had_rtk_rewrite: bool,
     had_gdb_suggestion: bool,
     had_ccc_redirect: bool,
@@ -659,7 +661,9 @@ impl Pipeline {
             cwd,
             reasons: Vec::new(),
             had_geofence_block: false,
+            had_bash_unwrap: false,
             had_cd_prepend: false,
+            had_nushell_wrap: false,
             had_rtk_rewrite: false,
             had_gdb_suggestion: false,
             had_ccc_redirect: false,
@@ -685,6 +689,9 @@ impl Pipeline {
             return; // Blocked — skip all subsequent stages
         }
 
+        // Stage 1: Bash unwrap — strip unnecessary `bash -c "..."` wrappers
+        self.stage_bash_unwrap();
+
         // Stage 2: Skill matching (Pillar 4) — read-only, skip if no DB
         self.stage_skills();
 
@@ -694,8 +701,13 @@ impl Pipeline {
         // Stage 4: GDB check (Pillar 2)
         self.stage_gdb();
 
-        // Stage 5: RTK rewriting
-        self.stage_rtk();
+        // Stage 5: Nushell wrapping (experimental) or RTK rewriting
+        if nushell::nushell_mode_enabled() {
+            self.stage_nushell();
+        }
+        if !self.had_nushell_wrap {
+            self.stage_rtk(); // Fallback: RTK if nushell didn't fire
+        }
 
         // Stage 6: CCC semantic search redirect (Pillar 2b)
         self.stage_ccc();
@@ -734,6 +746,55 @@ impl Pipeline {
             }
             geofence::GeofenceVerdict::Allow => false,
         }
+    }
+
+    /// Stage 1: Unwrap unnecessary `bash -c "..."` / `bash -c '...'` wrappers.
+    ///
+    /// Claude sometimes wraps simple commands in `bash -c "cmd"` which adds
+    /// subshell overhead and makes output noisier. This stage extracts the
+    /// inner command when safe to do so (single command, no shell features
+    /// that require bash -c).
+    fn stage_bash_unwrap(&mut self) {
+        let cmd = self.command.trim();
+
+        // Match: bash -c "..." or bash -c '...'
+        let inner = if let Some(rest) = cmd.strip_prefix("bash -c ") {
+            let rest = rest.trim();
+            let is_quoted = (rest.starts_with('"') && rest.ends_with('"'))
+                || (rest.starts_with('\'') && rest.ends_with('\''));
+            if is_quoted && rest.len() > 2 {
+                Some(&rest[1..rest.len() - 1])
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let inner = match inner {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
+        };
+
+        // Don't unwrap if the inner command uses shell features that need bash -c:
+        // pipes, redirects, semicolons, &&, ||, subshells, backgrounding
+        // These are legitimate uses of bash -c
+        if inner.contains('|')
+            || inner.contains('>')
+            || inner.contains('<')
+            || inner.contains(';')
+            || inner.contains("&&")
+            || inner.contains("||")
+            || inner.contains('$')
+            || inner.contains('`')
+            || inner.contains('&')
+        {
+            return;
+        }
+
+        self.command = inner.to_string();
+        self.had_bash_unwrap = true;
+        self.reasons.push("bash-unwrap".to_string());
     }
 
     /// Stage 2: Query heuristics.db for matching skills (read-only).
@@ -921,7 +982,25 @@ impl Pipeline {
         }
     }
 
-    /// Stage 5: RTK command rewriting.
+    /// Stage 5a: Nushell wrapping (experimental).
+    ///
+    /// Wraps commands in nushell equivalents that produce compact/structured output.
+    /// Only fires when `PRECC_NUSHELL=1` is set and nu is available.
+    fn stage_nushell(&mut self) {
+        let (prefix, cmd_part) = split_cd_prefix(&self.command);
+
+        if let Some(wrapped) = nushell::wrap(cmd_part) {
+            self.command = if prefix.is_empty() {
+                wrapped
+            } else {
+                format!("{}{}", prefix, wrapped)
+            };
+            self.had_nushell_wrap = true;
+            self.reasons.push("nushell-wrap".to_string());
+        }
+    }
+
+    /// Stage 5b: RTK command rewriting.
     fn stage_rtk(&mut self) {
         // RTK rewriting applies to the (possibly cd-prepended) command.
         // We need to rewrite the actual command part, not the cd prefix.
@@ -1065,9 +1144,21 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
             ts
         ));
     }
+    if pipeline.had_bash_unwrap {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"bash_unwrap\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
     if pipeline.had_cd_prepend {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"cd_prepend\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+    if pipeline.had_nushell_wrap {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"nushell_wrap\",\"value\":1.0}}\n",
             ts
         ));
     }
@@ -1726,5 +1817,59 @@ mod tests {
         let counts = parse_session_metrics(far_future);
         assert_eq!(counts.corrections, 0);
         assert_eq!(counts.latency_count, 0);
+    }
+
+    // -- bash_unwrap tests --
+
+    #[test]
+    fn bash_unwrap_double_quotes() {
+        let mut p = Pipeline::new(r#"bash -c "ls -la""#.to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert_eq!(p.command, "ls -la");
+        assert!(p.had_bash_unwrap);
+    }
+
+    #[test]
+    fn bash_unwrap_single_quotes() {
+        let mut p = Pipeline::new("bash -c 'cargo build'".to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert_eq!(p.command, "cargo build");
+        assert!(p.had_bash_unwrap);
+    }
+
+    #[test]
+    fn bash_unwrap_preserves_pipes() {
+        // Don't unwrap when inner command uses shell features
+        let mut p = Pipeline::new(r#"bash -c "ls | grep foo""#.to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert!(!p.had_bash_unwrap);
+    }
+
+    #[test]
+    fn bash_unwrap_preserves_redirects() {
+        let mut p = Pipeline::new(r#"bash -c "echo hi > file""#.to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert!(!p.had_bash_unwrap);
+    }
+
+    #[test]
+    fn bash_unwrap_preserves_subshells() {
+        let mut p = Pipeline::new(r#"bash -c "echo $(date)""#.to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert!(!p.had_bash_unwrap);
+    }
+
+    #[test]
+    fn bash_unwrap_ignores_plain_bash() {
+        let mut p = Pipeline::new("bash script.sh".to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert!(!p.had_bash_unwrap);
+    }
+
+    #[test]
+    fn bash_unwrap_ignores_non_bash() {
+        let mut p = Pipeline::new("cargo build".to_string(), ".".to_string());
+        p.stage_bash_unwrap();
+        assert!(!p.had_bash_unwrap);
     }
 }
