@@ -9,13 +9,13 @@ In a retrospective analysis of 89 real Claude Code sessions (3,078 commands), PR
 **Linux / macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.ps1 | iex
 ```
 
 Then run:
@@ -27,7 +27,7 @@ precc init
 ### Option 2: Claude Code Plugin
 
 ```bash
-claude plugin marketplace add yijunyu/precc
+claude plugin marketplace add peria-ai/precc
 claude plugin install precc
 ```
 

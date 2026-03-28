@@ -133,7 +133,7 @@ pub fn require_paid(feature: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{feature} requires a PRECC Pro (or higher) license.\n\
          Activate:  precc license activate <gumroad-or-stripe-key>\n\
-         Buy a key: https://github.com/yijunyu/precc-cc#pricing"
+         Buy a key: https://github.com/peria-ai/precc-cc#pricing"
     )
 }
 

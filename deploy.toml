@@ -1,6 +1,6 @@
 source_dir = "."
 demo_dir = "../precc-cc"
-demo_repo = "git@github.com:yijunyu/precc-cc.git"
+demo_repo = "git@github.com:peria-ai/precc-cc.git"
 demo_branch = "demo"
 remote_branch = "main"
 project_name = "precc-cc"
