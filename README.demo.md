@@ -143,6 +143,31 @@ Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878
 | **Cache reads saved** | **988M / 1.67B tokens (59%)** |
 | **Hook latency** | **2.93ms avg (1.77ms overhead)** |
 
+## Pricing
+
+PRECC is free for core features. Pro unlocks skill clustering, geofence compliance, and more.
+
+| Plan | Price | Duration |
+|------|-------|----------|
+| **Community** | Free | Forever |
+| **Pro (6-month)** | [$5](https://buy.stripe.com/5kQ14nb8r7u4bTb1Cj8k802) | 6 months |
+| **Pro (annual)** | [$10](https://buy.stripe.com/9B6aEXekD5lW5uN5Sz8k801) | 12 months |
+
+### How to subscribe
+
+1. **Purchase** — Click a price link above and complete Stripe Checkout
+2. **Check your email** — A license key will be sent automatically to your email
+3. **Activate** — Run:
+   ```bash
+   precc license activate PRECC-XXXXX-XXXXX-XXXXX-XXXXX --email you@example.com
+   ```
+4. **Verify** (optional):
+   ```bash
+   precc license status
+   ```
+
+> **GitHub Sponsors:** `precc license activate --github` (coming soon)
+
 ## Acknowledgements
 
 - [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) — AST-driven semantic code search engine

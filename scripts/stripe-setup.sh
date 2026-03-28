@@ -6,7 +6,7 @@
 #   - Logged in (stripe login)
 #
 # Creates:
-#   1. PRECC Pro (30-day) — $1
+#   1. PRECC Pro (6-month) — $5
 #   2. PRECC Pro (12-month) — $10
 #
 # Usage:
@@ -16,20 +16,22 @@
 set -euo pipefail
 
 MODE="test"
+STRIPE_FLAG=""
 if [[ "${1:-}" == "--live" ]]; then
     MODE="live"
+    STRIPE_FLAG="--live"
     echo "==> LIVE MODE — charges will be real"
 else
     echo "==> TEST MODE — no real charges"
 fi
 
-SUCCESS_URL="https://github.com/yijunyu/precc-cc?session_id={CHECKOUT_SESSION_ID}"
+SUCCESS_URL="https://github.com/peria-ai/precc-cc?session_id={CHECKOUT_SESSION_ID}"
 
 # ---------------------------------------------------------------------------
 # Product
 # ---------------------------------------------------------------------------
 echo "==> Creating PRECC Pro product..."
-PRODUCT_JSON=$(stripe products create \
+PRODUCT_JSON=$(stripe products create ${STRIPE_FLAG} \
     --name "PRECC Pro" \
     --description "Predictive Error Correction for Claude Code — Pro license with unlimited skills, detailed savings, email, and GIF generation.")
 PRODUCT_ID=$(echo "${PRODUCT_JSON}" | jq -r '.id')
@@ -41,26 +43,26 @@ fi
 echo "  Product: ${PRODUCT_ID}"
 
 # ---------------------------------------------------------------------------
-# Price 1: 30-day — $1
+# Price 1: 6-month — $5
 # ---------------------------------------------------------------------------
-echo "==> Creating 30-day price (\$1)..."
-PRICE_30D_JSON=$(stripe prices create \
+echo "==> Creating 6-month price (\$5)..."
+PRICE_6M_JSON=$(stripe prices create ${STRIPE_FLAG} \
     --product "${PRODUCT_ID}" \
-    --unit-amount 100 \
+    --unit-amount 500 \
     --currency usd)
-PRICE_30D=$(echo "${PRICE_30D_JSON}" | jq -r '.id')
-if [[ -z "${PRICE_30D}" || "${PRICE_30D}" == "null" ]]; then
-    echo "ERROR: Failed to create 30-day price:" >&2
-    echo "${PRICE_30D_JSON}" >&2
+PRICE_6M=$(echo "${PRICE_6M_JSON}" | jq -r '.id')
+if [[ -z "${PRICE_6M}" || "${PRICE_6M}" == "null" ]]; then
+    echo "ERROR: Failed to create 6-month price:" >&2
+    echo "${PRICE_6M_JSON}" >&2
     exit 1
 fi
-echo "  Price (30-day): ${PRICE_30D}"
+echo "  Price (6-month): ${PRICE_6M}"
 
 # ---------------------------------------------------------------------------
 # Price 2: 12-month — $10
 # ---------------------------------------------------------------------------
 echo "==> Creating 12-month price (\$10)..."
-PRICE_12M_JSON=$(stripe prices create \
+PRICE_12M_JSON=$(stripe prices create ${STRIPE_FLAG} \
     --product "${PRODUCT_ID}" \
     --unit-amount 1000 \
     --currency usd)
@@ -78,21 +80,21 @@ echo "  Price (12-month): ${PRICE_12M}"
 echo ""
 echo "==> Creating payment links..."
 
-LINK_30D_JSON=$(stripe payment_links create \
-    -d "line_items[0][price]=${PRICE_30D}" \
+LINK_6M_JSON=$(stripe payment_links create ${STRIPE_FLAG} \
+    -d "line_items[0][price]=${PRICE_6M}" \
     -d "line_items[0][quantity]=1" \
     -d "metadata[edition]=pro" \
-    -d "metadata[expiry_days]=30" \
+    -d "metadata[expiry_days]=180" \
     --after-completion.type=redirect \
     "--after-completion.redirect.url=${SUCCESS_URL}")
-LINK_30D=$(echo "${LINK_30D_JSON}" | jq -r '.url')
-if [[ -z "${LINK_30D}" || "${LINK_30D}" == "null" ]]; then
-    echo "ERROR: Failed to create 30-day payment link:" >&2
-    echo "${LINK_30D_JSON}" >&2
+LINK_6M=$(echo "${LINK_6M_JSON}" | jq -r '.url')
+if [[ -z "${LINK_6M}" || "${LINK_6M}" == "null" ]]; then
+    echo "ERROR: Failed to create 6-month payment link:" >&2
+    echo "${LINK_6M_JSON}" >&2
     exit 1
 fi
 
-LINK_12M_JSON=$(stripe payment_links create \
+LINK_12M_JSON=$(stripe payment_links create ${STRIPE_FLAG} \
     -d "line_items[0][price]=${PRICE_12M}" \
     -d "line_items[0][quantity]=1" \
     -d "metadata[edition]=pro" \
@@ -113,9 +115,9 @@ echo "==========================================="
 echo ""
 echo "  Product:     ${PRODUCT_ID}"
 echo ""
-echo "  30-day (\$1):"
-echo "    Price:     ${PRICE_30D}"
-echo "    Link:      ${LINK_30D}"
+echo "  6-month (\$5):"
+echo "    Price:     ${PRICE_6M}"
+echo "    Link:      ${LINK_6M}"
 echo ""
 echo "  12-month (\$10):"
 echo "    Price:     ${PRICE_12M}"
@@ -126,12 +128,5 @@ echo ""
 echo "  Next steps:"
 echo "    1. Add payment links to your README / pricing page"
 echo "    2. Set PRECC_STRIPE_SECRET_KEY in ~/.config/precc/build-secret"
-echo "       (append it or use a separate file)"
-echo "    3. Ensure metadata.expiry_days is passed through Checkout Sessions"
-echo ""
-echo "  Test a purchase:"
-echo "    - Open a payment link in your browser"
-echo "    - Use card 4242 4242 4242 4242, any future expiry, any CVC"
-echo "    - Copy the cs_test_XXXXX from the redirect URL"
-echo "    - Run: precc license activate cs_test_XXXXX"
+echo "    3. Webhook auto-sends license keys to customers via support@peria.ai"
 echo ""
