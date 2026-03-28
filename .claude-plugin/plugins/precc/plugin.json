@@ -67,6 +67,11 @@
       "name": "compress",
       "description": "Compress CLAUDE.md and context files to reduce token usage on every API call",
       "source": "./commands/compress.md"
+    },
+    {
+      "name": "cluster",
+      "description": "Cluster installed skills by function, find overlaps, and recommend token-efficient replacements",
+      "source": "./commands/cluster.md"
     }
   ]
 }

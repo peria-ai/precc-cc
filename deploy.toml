@@ -21,6 +21,7 @@ squash = true
 ".claude-plugin/plugins/precc/commands/savings.md" = ".claude-plugin/plugins/precc/commands/savings.md"
 ".claude-plugin/plugins/precc/commands/search.md" = ".claude-plugin/plugins/precc/commands/search.md"
 ".claude-plugin/plugins/precc/commands/compress.md" = ".claude-plugin/plugins/precc/commands/compress.md"
+".claude-plugin/plugins/precc/commands/cluster.md" = ".claude-plugin/plugins/precc/commands/cluster.md"
 ".github/workflows/clawhub-publish.yml" = ".github/workflows/clawhub-publish.yml"
 ".github/workflows/build-release.yml" = ".github/workflows/build-release.yml"
 "skills/precc/SKILL.md" = "skills/precc/SKILL.md"
