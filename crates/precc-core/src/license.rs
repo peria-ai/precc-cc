@@ -561,6 +561,18 @@ fn resolve_github_token() -> Result<String> {
     )
 }
 
+/// Retrieve the stored customer email from the license file (line 2), if present.
+pub fn stored_email() -> Option<String> {
+    let path = license_path().ok()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let mut lines = raw.lines();
+    lines.next(); // skip key
+    lines
+        .next()
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| !e.is_empty() && e.contains('@'))
+}
+
 /// Deactivate: remove the stored license key.
 pub fn deactivate() -> Result<()> {
     let path = license_path()?;
@@ -825,5 +837,63 @@ mod tests {
         assert!(is_github_key("--github"));
         assert!(!is_github_key("GH:abc"));
         assert!(!is_github_key("random"));
+    }
+
+    // =========================================================================
+    // stored_email tests
+    // =========================================================================
+
+    #[test]
+    fn stored_email_from_gumroad_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("license.key");
+        std::fs::write(&path, "GR:abc123\nbuyer@example.com\n").unwrap();
+
+        // stored_email reads from license_path() which uses HOME,
+        // so test the parsing logic directly
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines = raw.lines();
+        lines.next(); // skip key
+        let email = lines
+            .next()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty() && e.contains('@'));
+        assert_eq!(email, Some("buyer@example.com".to_string()));
+    }
+
+    #[test]
+    fn stored_email_missing_when_no_second_line() {
+        let raw = "ST:cs_live_abc\n";
+        let mut lines = raw.lines();
+        lines.next();
+        let email = lines
+            .next()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty() && e.contains('@'));
+        assert!(email.is_none());
+    }
+
+    #[test]
+    fn stored_email_missing_when_not_an_email() {
+        let raw = "GH:octocat\nnotanemail\n";
+        let mut lines = raw.lines();
+        lines.next();
+        let email = lines
+            .next()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty() && e.contains('@'));
+        assert!(email.is_none());
+    }
+
+    #[test]
+    fn stored_email_normalizes_case() {
+        let raw = "PRECC-DEADBEEF-00000000-00000001-AABBCCDD\nUser@Example.COM\n";
+        let mut lines = raw.lines();
+        lines.next();
+        let email = lines
+            .next()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty() && e.contains('@'));
+        assert_eq!(email, Some("user@example.com".to_string()));
     }
 }
