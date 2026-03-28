@@ -252,6 +252,16 @@ pub fn load() -> Result<Option<License>> {
         }));
     }
 
+    // GitHub Sponsors keys: stored as "GH:<username>" — trusted after first online verification
+    if is_stored_github_key(key) {
+        return Ok(Some(License {
+            machine_tag: [0; 4],
+            expiry_days: 0,
+            edition_flags: 1, // Pro
+            machine_bound: false,
+        }));
+    }
+
     // PRECC native keys
     let lic = parse(key)?;
     if lic.is_expired() {
@@ -437,6 +447,118 @@ pub fn activate_stripe(key: &str) -> Result<License> {
         edition_flags: 1, // Pro
         machine_bound: false,
     })
+}
+
+// =============================================================================
+// GitHub Sponsors license verification
+// =============================================================================
+
+/// The GitHub username of the sponsored maintainer.
+const GITHUB_SPONSOR_LOGIN: &str = "yijunyu";
+
+/// Check if a key looks like a GitHub Sponsors flag.
+pub fn is_github_key(key: &str) -> bool {
+    key.trim().starts_with("--github")
+}
+
+/// Check if a stored key is a GitHub Sponsors key (prefixed with "GH:").
+fn is_stored_github_key(key: &str) -> bool {
+    key.starts_with("GH:")
+}
+
+/// Verify GitHub sponsorship and activate if the user is an active sponsor.
+///
+/// Uses `GITHUB_TOKEN` env var or falls back to the `gh` CLI token.
+/// Queries GitHub GraphQL API to check if the authenticated user sponsors
+/// the maintainer. On success, stores `GH:<username>` locally.
+pub fn activate_github() -> Result<License> {
+    let token = resolve_github_token()?;
+
+    // Query the authenticated user's login
+    let user_resp = ureq::post("https://api.github.com/graphql")
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", "precc")
+        .send_json(serde_json::json!({
+            "query": "{ viewer { login } }"
+        }))
+        .map_err(|e| anyhow::anyhow!("GitHub API request failed: {e}"))?;
+
+    let user_body: serde_json::Value = user_resp
+        .into_json()
+        .map_err(|e| anyhow::anyhow!("Failed to parse GitHub response: {e}"))?;
+
+    let username = user_body["data"]["viewer"]["login"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine GitHub username from token"))?
+        .to_string();
+
+    // Check if the authenticated user sponsors the maintainer
+    let query = format!(
+        r#"{{ user(login: "{GITHUB_SPONSOR_LOGIN}") {{ isSponsoredBy(accountLogin: "{username}") }} }}"#
+    );
+
+    let sponsor_resp = ureq::post("https://api.github.com/graphql")
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", "precc")
+        .send_json(serde_json::json!({ "query": query }))
+        .map_err(|e| anyhow::anyhow!("GitHub sponsorship check failed: {e}"))?;
+
+    let sponsor_body: serde_json::Value = sponsor_resp
+        .into_json()
+        .map_err(|e| anyhow::anyhow!("Failed to parse GitHub sponsorship response: {e}"))?;
+
+    let is_sponsored = sponsor_body["data"]["user"]["isSponsoredBy"]
+        .as_bool()
+        .unwrap_or(false);
+
+    if !is_sponsored {
+        bail!(
+            "GitHub user @{username} is not currently sponsoring @{GITHUB_SPONSOR_LOGIN}.\n\
+             Sponsor at: https://github.com/sponsors/{GITHUB_SPONSOR_LOGIN}"
+        );
+    }
+
+    // Valid sponsor — store locally
+    let path = license_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, format!("GH:{username}\n"))?;
+
+    Ok(License {
+        machine_tag: [0; 4],
+        expiry_days: 0,
+        edition_flags: 1, // Pro
+        machine_bound: false,
+    })
+}
+
+/// Resolve a GitHub token from GITHUB_TOKEN env or the `gh` CLI config.
+fn resolve_github_token() -> Result<String> {
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+
+    let output = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output();
+
+    if let Ok(out) = output {
+        if out.status.success() {
+            let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !token.is_empty() {
+                return Ok(token);
+            }
+        }
+    }
+
+    bail!(
+        "No GitHub token found. Either:\n\
+         - Set GITHUB_TOKEN environment variable, or\n\
+         - Install and login with GitHub CLI: gh auth login"
+    )
 }
 
 /// Deactivate: remove the stored license key.
@@ -684,5 +806,24 @@ mod tests {
         assert!(is_gumroad_key("GR:abc123"));
         assert!(!is_gumroad_key("ST:abc"));
         assert!(!is_gumroad_key("abc"));
+    }
+
+    // =========================================================================
+    // GitHub Sponsors key detection
+    // =========================================================================
+
+    #[test]
+    fn is_stored_github_key_works() {
+        assert!(is_stored_github_key("GH:octocat"));
+        assert!(!is_stored_github_key("GR:abc"));
+        assert!(!is_stored_github_key("ST:abc"));
+        assert!(!is_stored_github_key("octocat"));
+    }
+
+    #[test]
+    fn is_github_key_works() {
+        assert!(is_github_key("--github"));
+        assert!(!is_github_key("GH:abc"));
+        assert!(!is_github_key("random"));
     }
 }

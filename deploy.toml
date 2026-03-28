@@ -25,3 +25,4 @@ squash = true
 ".github/workflows/clawhub-publish.yml" = ".github/workflows/clawhub-publish.yml"
 ".github/workflows/build-release.yml" = ".github/workflows/build-release.yml"
 "skills/precc/SKILL.md" = "skills/precc/SKILL.md"
+".github/FUNDING.yml" = ".github/FUNDING.yml"

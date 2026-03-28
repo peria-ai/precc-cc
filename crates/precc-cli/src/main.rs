@@ -204,10 +204,13 @@ enum LicenseAction {
     /// Activate a license key
     Activate {
         /// License key (format: PRECC-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX)
-        key: String,
+        key: Option<String>,
         /// Email address used for purchase (for email-bound keys)
         #[arg(long)]
         email: Option<String>,
+        /// Activate via GitHub Sponsors (uses GITHUB_TOKEN or gh CLI)
+        #[arg(long)]
+        github: bool,
     },
     /// Show current license status
     Status,
@@ -2314,20 +2317,28 @@ fn cmd_gha(url: String) -> Result<()> {
 
 fn cmd_license(action: LicenseAction) -> Result<()> {
     match action {
-        LicenseAction::Activate { key, email } => {
-            let lic = if key.starts_with("PRECC-") {
-                // PRECC native key
-                if let Some(ref email) = email {
-                    license::activate_with_email(&key, email)?
-                } else {
-                    license::activate(&key)?
-                }
-            } else if license::is_stripe_key(&key) {
-                // Stripe key — verify online
-                license::activate_stripe(&key)?
+        LicenseAction::Activate { key, email, github } => {
+            let lic = if github {
+                // GitHub Sponsors — verify via GitHub API
+                license::activate_github()?
             } else {
-                // Gumroad key — verify online
-                license::activate_gumroad(&key)?
+                let key = key.ok_or_else(|| anyhow::anyhow!(
+                    "License key required. Use --github for GitHub Sponsors, or provide a key."
+                ))?;
+                if key.starts_with("PRECC-") {
+                    // PRECC native key
+                    if let Some(ref email) = email {
+                        license::activate_with_email(&key, email)?
+                    } else {
+                        license::activate(&key)?
+                    }
+                } else if license::is_stripe_key(&key) {
+                    // Stripe key — verify online
+                    license::activate_stripe(&key)?
+                } else {
+                    // Gumroad key — verify online
+                    license::activate_gumroad(&key)?
+                }
             };
             println!("License activated successfully.");
             println!("  Edition:        {}", lic.edition_name());
