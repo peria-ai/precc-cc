@@ -18,6 +18,7 @@ use std::io::Write;
 
 mod gif;
 mod mail;
+mod webhook;
 
 #[derive(Parser)]
 #[command(
@@ -99,6 +100,15 @@ enum Commands {
     Mail {
         #[command(subcommand)]
         action: MailAction,
+    },
+    /// Run Stripe webhook server for automatic license delivery
+    Webhook {
+        /// Port to listen on (default: 8090)
+        #[arg(long)]
+        port: Option<u16>,
+        /// Stripe webhook signing secret (whsec_XXXXX)
+        #[arg(long)]
+        stripe_secret: Option<String>,
     },
     /// Update PRECC binaries to the latest release
     Update {
@@ -324,6 +334,7 @@ fn main() -> Result<()> {
         Some(Commands::Gha { url }) => cmd_gha(url),
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
+        Some(Commands::Webhook { port, stripe_secret }) => webhook::serve(port, stripe_secret),
         Some(Commands::Update {
             force,
             version,

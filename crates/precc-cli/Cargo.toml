@@ -20,3 +20,7 @@ toml.workspace = true
 obfstr.workspace = true
 lettre.workspace = true
 tempfile.workspace = true
+tiny_http.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true

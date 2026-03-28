@@ -29,6 +29,7 @@ lettre = { version = "0.11", default-features = false, features = ["smtp-transpo
 libc = "0.2"
 tempfile = "3"
 ureq = { version = "2", features = ["json"] }
+tiny_http = "0.12"
 
 [profile.release]
 opt-level = 3
