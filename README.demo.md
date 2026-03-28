@@ -76,6 +76,15 @@ precc compress
 precc compress --revert
 ```
 
+### New in v0.2.6
+
+- **Comment blocker** — Blocks `# ...` comment lines from executing as bash commands, eliminating no-op error output (~51K tokens saved historically)
+- **Bash unwrap** — Strips unnecessary `bash -c "cmd"` wrappers to run commands directly, reducing subshell overhead
+- **Nushell integration** (experimental) — Rewrites commands to use compact/structured output modes (`--message-format=short`, `--porcelain`, `-json`); set `PRECC_NUSHELL=1` to enable
+- **What-if analysis** — `precc nushell what-if` replays historical sessions to compare bash vs RTK vs nushell token savings by usage category
+- **Skill clustering** (**Pro**) — `precc skills cluster` scans installed skills, clusters by TF-IDF similarity, and recommends removing duplicates to save context tokens
+- **Geofence compliance guard** (**Pro**) — Detects restricted IP regions and blocks Anthropic API interactions to protect accounts, suggests alternative LLMs for blocked regions
+
 ## Usage
 
 Once installed, PRECC works automatically. Every bash command Claude Code runs passes through the hook, which silently fixes common mistakes and compresses output.
@@ -96,6 +105,12 @@ precc skills edit <name>    # open in $EDITOR and reimport on save
 
 # View unified savings report (all three pillars)
 precc savings
+
+# What-if: compare token savings across bash, RTK, and nushell
+precc nushell what-if
+
+# Audit installed skills for overlap and recommend removals (Pro)
+precc skills cluster
 ```
 
 ## Security

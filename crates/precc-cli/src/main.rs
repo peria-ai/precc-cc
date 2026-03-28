@@ -931,6 +931,10 @@ fn write_skill_toml(
 // =============================================================================
 
 fn cmd_skills_cluster(threshold: f64) -> Result<()> {
+    if !license::tier().is_paid() {
+        return Err(license::require_paid("Skill cluster analysis"));
+    }
+
     println!("Scanning installed skills...");
     let skills = skill_advisor::scan_installed_skills()?;
 
