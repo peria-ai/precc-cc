@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "yijunyu/precc-cc"
+$Repo = "peria-ai/precc-cc"
 $Target = "x86_64-pc-windows-msvc"
 $InstallDir = Join-Path $env:LOCALAPPDATA "precc-cc\bin"
 
@@ -201,11 +201,70 @@ if ($cccInstalled) {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: install Nushell (structured output for further token savings)
+# ---------------------------------------------------------------------------
+Write-Host ""
+$hasNu = Get-Command "nu" -ErrorAction SilentlyContinue
+$nuInstalled = $false
+
+if ($hasNu) {
+    Write-Host "  Nushell already installed: $(nu --version 2>$null)"
+    $nuInstalled = $true
+} else {
+    Write-Host "Installing Nushell (structured shell for compact CLI output)..."
+
+    $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+    if (-not $hasCargo) {
+        Write-Host "  Rust/Cargo not found — installing via rustup..."
+        $rustupUrl = "https://win.rustup.rs/x86_64"
+        $rustupPath = Join-Path $env:TEMP "rustup-init.exe"
+        try {
+            Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupPath -UseBasicParsing
+            & $rustupPath -y --default-toolchain stable 2>$null
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+        } catch {
+            Write-Host "  Failed to install Rust via rustup"
+        }
+    }
+
+    if ($hasCargo) {
+        Write-Host "  Installing Nushell via cargo (this may take a few minutes)..."
+        cargo install nu 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $nuInstalled = $true
+            Write-Host "  Installed Nushell via cargo"
+        }
+    }
+
+    if (-not $nuInstalled) {
+        # Try winget
+        $hasWinget = Get-Command "winget" -ErrorAction SilentlyContinue
+        if ($hasWinget) {
+            Write-Host "  Installing Nushell via winget..."
+            winget install nushell 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $nuInstalled = $true
+                Write-Host "  Installed Nushell via winget"
+            }
+        }
+    }
+
+    if (-not $nuInstalled) {
+        Write-Host "  Skipped: install Nushell manually from https://www.nushell.sh/book/installation.html"
+        Write-Host "  Then set PRECC_NUSHELL=1 to enable compact output rewriting."
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "PRECC $Version installed to $InstallDir."
 Write-Host "Run 'precc init' to initialize databases."
+if ($nuInstalled) {
+    Write-Host "Nushell is available. Set PRECC_NUSHELL=1 to enable compact output rewriting."
+}
 if ($cccInstalled) {
     Write-Host "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
 }

@@ -133,11 +133,11 @@ $ precc init
 
 ## Measured Results
 
-Analyzed across 29 real Claude Code sessions, 5 projects, 5,384 bash calls, $878 total spend:
+Analyzed across 89 real Claude Code sessions, 3,078 bash calls:
 
 | Metric | Value |
 |--------|-------|
-| **Cost savings** | **$296 / $878 (34%)** |
+| **Token savings** | **43% total reduction** (vs 17% RTK alone) |
 | **Failures prevented** | **352 / 358 (98%)** |
 | **Bash calls improved** | **894 / 5,384 (17%)** |
 | **Cache reads saved** | **988M / 1.67B tokens (59%)** |
@@ -172,4 +172,5 @@ PRECC is free for core features. Pro unlocks skill clustering, geofence complian
 
 - [cocoindex-code](https://github.com/cocoindex-io/cocoindex-code) — AST-driven semantic code search engine
 - [token-saver](https://clawhub.ai/skills/token-saver) — Context file compression patterns (MIT-0, by RubenAQuispe)
+- [Nushell](https://github.com/nushell/nushell) — Structured shell for compact/machine-readable output, further improving on RTK compression
 - [RTK](https://github.com/rtk-ai/rtk) — CLI output compression toolkit

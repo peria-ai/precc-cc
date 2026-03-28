@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO="yijunyu/precc-cc"
+REPO="peria-ai/precc-cc"
 DEFAULT_PREFIX="${HOME}/.local"
 
 # ---------------------------------------------------------------------------
@@ -260,12 +260,71 @@ install_cocoindex_code
 wire_mcp_cocoindex
 
 # ---------------------------------------------------------------------------
+# Optional: install Nushell (structured output for further token savings)
+# ---------------------------------------------------------------------------
+install_nushell() {
+    if command -v nu &>/dev/null; then
+        echo "  Nushell already installed: $(nu --version 2>/dev/null)"
+        return 0
+    fi
+
+    echo ""
+    echo "Installing Nushell (structured shell for compact CLI output)..."
+
+    case "${OS}" in
+        Linux)
+            if ! command -v cargo &>/dev/null; then
+                echo "  Rust/Cargo not found — installing via rustup..."
+                curl -fsSL https://sh.rustup.rs | sh -s -- -y 2>/dev/null
+                # shellcheck disable=SC1091
+                source "${HOME}/.cargo/env" 2>/dev/null || true
+            fi
+            if command -v cargo &>/dev/null; then
+                cargo install nu 2>/dev/null && echo "  Installed Nushell via cargo" && return 0
+            fi
+            # Try GitHub release binary
+            local NU_VERSION
+            NU_VERSION="$(curl -fsSL https://api.github.com/repos/nushell/nushell/releases/latest \
+                | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')" 2>/dev/null || true
+            if [[ -n "${NU_VERSION}" ]]; then
+                local NU_ARCHIVE="nu-${NU_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz"
+                local NU_URL="https://github.com/nushell/nushell/releases/download/${NU_VERSION}/${NU_ARCHIVE}"
+                if curl -fsSL -o "${TMP}/nu.tar.gz" "${NU_URL}" 2>/dev/null; then
+                    tar -xzf "${TMP}/nu.tar.gz" -C "${TMP}" 2>/dev/null
+                    local NU_BIN
+                    NU_BIN="$(find "${TMP}" -name nu -type f -executable 2>/dev/null | head -1)"
+                    if [[ -n "${NU_BIN}" ]]; then
+                        install -m 755 "${NU_BIN}" "${BIN_DIR}/nu"
+                        echo "  Installed Nushell ${NU_VERSION} to ${BIN_DIR}/nu"
+                        return 0
+                    fi
+                fi
+            fi
+            ;;
+        Darwin)
+            if command -v brew &>/dev/null; then
+                brew install nushell 2>/dev/null && echo "  Installed Nushell via Homebrew" && return 0
+            fi
+            ;;
+    esac
+
+    echo "  Skipped: install Nushell manually from https://www.nushell.sh/book/installation.html"
+    echo "  Then set PRECC_NUSHELL=1 to enable compact output rewriting."
+    return 1
+}
+
+install_nushell
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""
 echo "PRECC ${VERSION} installed to ${BIN_DIR}."
 echo "Run 'precc init' to initialize databases."
 echo ""
+if command -v nu &>/dev/null; then
+    echo "Nushell is available. Set PRECC_NUSHELL=1 to enable compact output rewriting."
+fi
 if command -v ccc &>/dev/null; then
     echo "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
 fi
