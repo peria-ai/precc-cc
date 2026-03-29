@@ -83,7 +83,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "tar extraction failed" }
             $downloaded = $true
         } catch {
-            Write-Error "Failed to download PRECC $Version for Windows. The Windows build may not be available yet — try again in 10 minutes."
+            Write-Error "Failed to download PRECC $Version for Windows. The Windows build may not be available yet — try again in 20 minutes."
             exit 1
         }
     }

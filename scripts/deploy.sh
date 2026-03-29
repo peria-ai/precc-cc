@@ -248,4 +248,4 @@ fi
 
 echo ""
 echo "Done. PRECC ${VERSION} is live at https://github.com/${PUBLIC_REPO}/releases/tag/${VERSION}"
-echo "  Windows binary will be available once the CI workflow completes (~10 min)."
+echo "  Windows binary will be available once the CI workflow completes (~20 min)."
