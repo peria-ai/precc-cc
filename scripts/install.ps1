@@ -23,16 +23,6 @@ $Target = "x86_64-pc-windows-msvc"
 $InstallDir = Join-Path $env:LOCALAPPDATA "precc-cc\bin"
 
 # ---------------------------------------------------------------------------
-# WSL detection — if running under WSL, delegate to the Linux installer
-# ---------------------------------------------------------------------------
-$wslCheck = Get-Command "wsl" -ErrorAction SilentlyContinue
-if ($wslCheck -and (wsl echo ok 2>$null) -eq "ok") {
-    Write-Host "WSL detected — using Linux installer instead."
-    wsl bash -c "curl -fsSL https://raw.githubusercontent.com/$Repo/main/scripts/install.sh | bash"
-    exit $LASTEXITCODE
-}
-
-# ---------------------------------------------------------------------------
 # Resolve version
 # ---------------------------------------------------------------------------
 if (-not $Version) {
