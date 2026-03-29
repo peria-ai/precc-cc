@@ -1,7 +1,7 @@
 # install.ps1 — PRECC installer for Windows
 #
 # Usage (PowerShell one-liner):
-#   iwr -useb https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.ps1 | iex
 #
 # Or download and run:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 [-Version v0.1.0]
@@ -57,7 +57,7 @@ Write-Host "Installing PRECC $Version..."
 # ---------------------------------------------------------------------------
 # Download and extract
 # ---------------------------------------------------------------------------
-$Archive = "precc-$Version-$Target.zip"
+$Archive = "precc-$Version-$Target.tar.gz"
 $Url = "https://github.com/$Repo/releases/download/$Version/$Archive"
 $TmpDir = Join-Path $env:TEMP "precc-install-$(New-Guid)"
 $ArchivePath = Join-Path $TmpDir $Archive
@@ -76,7 +76,11 @@ try {
     Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -UseBasicParsing
 
     Write-Host "Extracting..."
-    Expand-Archive -Path $ArchivePath -DestinationPath $TmpDir -Force
+    tar -xzf $ArchivePath -C $TmpDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to extract archive. Ensure 'tar' is available (Windows 10+)."
+        exit 1
+    }
 
     $Extracted = Join-Path $TmpDir "precc-$Version-$Target"
 
@@ -213,39 +217,40 @@ if ($hasNu) {
 } else {
     Write-Host "Installing Nushell (structured shell for compact CLI output)..."
 
-    $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-    if (-not $hasCargo) {
-        Write-Host "  Rust/Cargo not found — installing via rustup..."
-        $rustupUrl = "https://win.rustup.rs/x86_64"
-        $rustupPath = Join-Path $env:TEMP "rustup-init.exe"
-        try {
-            Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupPath -UseBasicParsing
-            & $rustupPath -y --default-toolchain stable 2>$null
-            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-            $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-        } catch {
-            Write-Host "  Failed to install Rust via rustup"
-        }
-    }
-
-    if ($hasCargo) {
-        Write-Host "  Installing Nushell via cargo (this may take a few minutes)..."
-        cargo install nu 2>$null
+    # Try winget first (fast, prebuilt binary)
+    $hasWinget = Get-Command "winget" -ErrorAction SilentlyContinue
+    if ($hasWinget) {
+        Write-Host "  Installing Nushell via winget..."
+        winget install nushell --accept-source-agreements --accept-package-agreements 2>$null
         if ($LASTEXITCODE -eq 0) {
             $nuInstalled = $true
-            Write-Host "  Installed Nushell via cargo"
+            Write-Host "  Installed Nushell via winget"
         }
     }
 
+    # Fall back to cargo (slower, compiles from source)
     if (-not $nuInstalled) {
-        # Try winget
-        $hasWinget = Get-Command "winget" -ErrorAction SilentlyContinue
-        if ($hasWinget) {
-            Write-Host "  Installing Nushell via winget..."
-            winget install nushell 2>$null
+        $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+        if (-not $hasCargo) {
+            Write-Host "  Rust/Cargo not found — installing via rustup..."
+            $rustupUrl = "https://win.rustup.rs/x86_64"
+            $rustupPath = Join-Path $env:TEMP "rustup-init.exe"
+            try {
+                Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupPath -UseBasicParsing
+                & $rustupPath -y --default-toolchain stable 2>$null
+                $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+                $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+            } catch {
+                Write-Host "  Failed to install Rust via rustup"
+            }
+        }
+
+        if ($hasCargo) {
+            Write-Host "  Installing Nushell via cargo (this may take a few minutes)..."
+            cargo install nu 2>$null
             if ($LASTEXITCODE -eq 0) {
                 $nuInstalled = $true
-                Write-Host "  Installed Nushell via winget"
+                Write-Host "  Installed Nushell via cargo"
             }
         }
     }

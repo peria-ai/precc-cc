@@ -2,7 +2,7 @@
 # install.sh — PRECC installer for Linux and macOS
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 #   or: bash install.sh [--version v0.1.0] [--prefix ~/.local]
 #
 # After installation:
