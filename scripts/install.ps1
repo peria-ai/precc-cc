@@ -47,13 +47,10 @@ Write-Host "Installing PRECC $Version..."
 # ---------------------------------------------------------------------------
 # Download and extract
 # ---------------------------------------------------------------------------
-$Archive = "precc-$Version-$Target.tar.gz"
-$Url = "https://github.com/$Repo/releases/download/$Version/$Archive"
 $TmpDir = Join-Path $env:TEMP "precc-install-$(New-Guid)"
-$ArchivePath = Join-Path $TmpDir $Archive
 
 if ($WhatIf) {
-    Write-Host "[WhatIf] Would download: $Url"
+    Write-Host "[WhatIf] Would download from: https://github.com/$Repo/releases/download/$Version/"
     Write-Host "[WhatIf] Would install to: $InstallDir"
     Write-Host "[WhatIf] Would wire hook in: $env:APPDATA\Claude\settings.json"
     exit 0
@@ -62,14 +59,33 @@ if ($WhatIf) {
 New-Item -ItemType Directory -Path $TmpDir | Out-Null
 
 try {
-    Write-Host "Downloading $Url..."
-    Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -UseBasicParsing
+    # Try .zip first (CI-built), fall back to .tar.gz
+    $ZipArchive = "precc-$Version-$Target.zip"
+    $TgzArchive = "precc-$Version-$Target.tar.gz"
+    $ZipUrl = "https://github.com/$Repo/releases/download/$Version/$ZipArchive"
+    $TgzUrl = "https://github.com/$Repo/releases/download/$Version/$TgzArchive"
 
-    Write-Host "Extracting..."
-    tar -xzf $ArchivePath -C $TmpDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to extract archive. Ensure 'tar' is available (Windows 10+)."
-        exit 1
+    $downloaded = $false
+    try {
+        $ArchivePath = Join-Path $TmpDir $ZipArchive
+        Write-Host "Downloading $ZipUrl..."
+        Invoke-WebRequest -Uri $ZipUrl -OutFile $ArchivePath -UseBasicParsing
+        Write-Host "Extracting..."
+        Expand-Archive -Path $ArchivePath -DestinationPath $TmpDir -Force
+        $downloaded = $true
+    } catch {
+        Write-Host "  .zip not found, trying .tar.gz..."
+        try {
+            $ArchivePath = Join-Path $TmpDir $TgzArchive
+            Invoke-WebRequest -Uri $TgzUrl -OutFile $ArchivePath -UseBasicParsing
+            Write-Host "Extracting..."
+            tar -xzf $ArchivePath -C $TmpDir
+            if ($LASTEXITCODE -ne 0) { throw "tar extraction failed" }
+            $downloaded = $true
+        } catch {
+            Write-Error "Failed to download PRECC $Version for Windows. The Windows build may not be available yet — try again in 10 minutes."
+            exit 1
+        }
     }
 
     $Extracted = Join-Path $TmpDir "precc-$Version-$Target"

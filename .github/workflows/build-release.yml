@@ -1,6 +1,6 @@
 name: Build and Release
 
-# Runs on the PUBLIC repo (yijunyu/precc-cc).
+# Runs on the PUBLIC repo (peria-ai/precc-cc).
 # Triggered by workflow_dispatch from the private repo's sync-and-trigger workflow,
 # or manually with a version tag.
 #

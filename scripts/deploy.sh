@@ -233,5 +233,19 @@ git commit -am "deployed ${VERSION}" || echo "(nothing to commit)"
 git push origin master
 git push origin demo 2>/dev/null || true
 
+# ---------------------------------------------------------------------------
+# Step 7: Trigger CI workflow for Windows build
+# ---------------------------------------------------------------------------
+echo "==> Step 7: Triggering CI workflow for Windows build..."
+if gh workflow run build-release.yml \
+    --repo "${PUBLIC_REPO}" \
+    --field "release_version=${VERSION}" 2>/dev/null; then
+    echo "  CI workflow triggered — Windows binary will be added to the release automatically."
+else
+    echo "  Note: CI workflow trigger failed. Run manually:"
+    echo "    gh workflow run build-release.yml --repo ${PUBLIC_REPO} -f release_version=${VERSION}"
+fi
+
 echo ""
 echo "Done. PRECC ${VERSION} is live at https://github.com/${PUBLIC_REPO}/releases/tag/${VERSION}"
+echo "  Windows binary will be available once the CI workflow completes (~10 min)."
