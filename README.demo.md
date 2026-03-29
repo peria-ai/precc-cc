@@ -4,6 +4,12 @@ In a retrospective analysis of 89 real Claude Code sessions (3,078 commands), PR
 
 ## Install
 
+Scan to get started:
+
+<p align="center">
+  <a href="https://peria.ai/go/"><img src="https://peria.ai/assets/precc-install-qr.png" alt="Install PRECC" width="160"></a>
+</p>
+
 ### Option 1: Pre-built binary (recommended)
 
 **Linux / macOS:**
