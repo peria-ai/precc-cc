@@ -184,16 +184,19 @@ $hasPip = Get-Command "pip3" -ErrorAction SilentlyContinue
 $cccInstalled = $false
 if ($hasPipx) {
     Write-Host "Installing cocoindex-code via pipx..."
-    pipx install cocoindex-code 2>$null
+    $null = pipx install cocoindex-code *>&1
     if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pipx" }
+    else { Write-Host "  Skipped cocoindex-code (pipx install failed — network issue?)" }
 } elseif ($hasUv) {
     Write-Host "Installing cocoindex-code via uv..."
-    uv tool install --upgrade cocoindex-code --prerelease explicit 2>$null
+    $null = uv tool install --upgrade cocoindex-code --prerelease explicit *>&1
     if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via uv" }
+    else { Write-Host "  Skipped cocoindex-code (uv install failed — network issue?)" }
 } elseif ($hasPip) {
     Write-Host "Installing cocoindex-code via pip3..."
-    pip3 install --user cocoindex-code 2>$null
+    $null = pip3 install --user cocoindex-code *>&1
     if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pip3" }
+    else { Write-Host "  Skipped cocoindex-code (pip3 install failed — network issue?)" }
 } else {
     Write-Host "  Skipped cocoindex-code: install pipx, uv, or pip3 first, then run:"
     Write-Host "    pipx install cocoindex-code"
@@ -227,7 +230,7 @@ if ($hasNu) {
     $hasWinget = Get-Command "winget" -ErrorAction SilentlyContinue
     if ($hasWinget) {
         Write-Host "  Installing Nushell via winget..."
-        winget install nushell --accept-source-agreements --accept-package-agreements 2>$null
+        $null = winget install nushell --accept-source-agreements --accept-package-agreements *>&1
         if ($LASTEXITCODE -eq 0) {
             $nuInstalled = $true
             Write-Host "  Installed Nushell via winget"
@@ -253,7 +256,7 @@ if ($hasNu) {
 
         if ($hasCargo) {
             Write-Host "  Installing Nushell via cargo (this may take a few minutes)..."
-            cargo install nu 2>$null
+            $null = cargo install nu *>&1
             if ($LASTEXITCODE -eq 0) {
                 $nuInstalled = $true
                 Write-Host "  Installed Nushell via cargo"
