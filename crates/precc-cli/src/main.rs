@@ -105,14 +105,10 @@ enum Commands {
         #[command(subcommand)]
         action: MailAction,
     },
-    /// Run Stripe webhook server for automatic license delivery
+    /// Stripe webhook server and license delivery
     Webhook {
-        /// Port to listen on (default: 8090)
-        #[arg(long)]
-        port: Option<u16>,
-        /// Stripe webhook signing secret (whsec_XXXXX)
-        #[arg(long)]
-        stripe_secret: Option<String>,
+        #[command(subcommand)]
+        action: WebhookAction,
     },
     /// Update PRECC binaries to the latest release
     Update {
@@ -211,6 +207,21 @@ enum MailAction {
         #[arg(long = "attach", short = 'a')]
         attachments: Vec<std::path::PathBuf>,
     },
+}
+
+#[derive(clap::Subcommand)]
+enum WebhookAction {
+    /// Start the Stripe webhook server
+    Serve {
+        /// Port to listen on (default: 8090)
+        #[arg(long)]
+        port: Option<u16>,
+        /// Stripe webhook signing secret (whsec_XXXXX)
+        #[arg(long)]
+        stripe_secret: Option<String>,
+    },
+    /// Check and send any pending expiry reminder emails (run daily via cron)
+    CheckReminders,
 }
 
 #[derive(clap::Subcommand)]
@@ -338,10 +349,17 @@ fn main() -> Result<()> {
         Some(Commands::Gha { url }) => cmd_gha(url),
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
-        Some(Commands::Webhook {
-            port,
-            stripe_secret,
-        }) => webhook::serve(port, stripe_secret),
+        Some(Commands::Webhook { action }) => match action {
+            WebhookAction::Serve {
+                port,
+                stripe_secret,
+            } => webhook::serve(port, stripe_secret),
+            WebhookAction::CheckReminders => {
+                let sent = webhook::check_reminders()?;
+                println!("{sent} reminder(s) sent.");
+                Ok(())
+            }
+        },
         Some(Commands::Update {
             force,
             version,
@@ -2507,13 +2525,13 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
                 "  Machine-bound:  {}",
                 if lic.machine_bound { "yes" } else { "no" }
             );
-            if lic.expiry_days > 0 {
-                println!(
-                    "  Expires:        day {} (Unix epoch days)",
-                    lic.expiry_days
-                );
-            } else {
-                println!("  Expires:        never");
+            println!("  Expires:        {}", lic.expiry_date());
+            if let Some(remaining) = lic.days_remaining() {
+                if remaining > 0 {
+                    println!("  Days remaining: {remaining}");
+                } else {
+                    println!("  Status:         EXPIRED");
+                }
             }
             Ok(())
         }

@@ -63,6 +63,43 @@ impl License {
             / 86400;
         now_days > self.expiry_days as u64
     }
+    /// Return a human-readable expiry date string (e.g. "2026-09-27")
+    /// or "never" if the key has no expiry.
+    pub fn expiry_date(&self) -> String {
+        if self.expiry_days == 0 {
+            return "never".to_string();
+        }
+        let secs = self.expiry_days as u64 * 86400;
+        // Simple date calculation from epoch seconds
+        let days = secs / 86400;
+        // Algorithm: convert days since epoch to Y-M-D
+        // Based on Howard Hinnant's chrono-compatible algorithm
+        let z = days + 719468;
+        let era = z / 146097;
+        let doe = z - era * 146097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if m <= 2 { y + 1 } else { y };
+        format!("{y:04}-{m:02}-{d:02}")
+    }
+
+    /// Return the number of days remaining until expiry, or None if never expires.
+    pub fn days_remaining(&self) -> Option<i64> {
+        if self.expiry_days == 0 {
+            return None;
+        }
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            / 86400;
+        Some(self.expiry_days as i64 - now_days as i64)
+    }
+
     pub fn edition_name(&self) -> &'static str {
         if self.is_enterprise() {
             "Enterprise"

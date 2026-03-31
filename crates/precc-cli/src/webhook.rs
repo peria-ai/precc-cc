@@ -132,20 +132,32 @@ fn handle_checkout_completed(event: &serde_json::Value) -> Result<String> {
 
     let session_id = session["id"].as_str().unwrap_or("unknown");
 
-    // Determine expiry from metadata (set by stripe-setup.sh)
-    let expiry_days: u32 = session["metadata"]["expiry_days"]
+    // Determine expiry from metadata (set by stripe-setup.sh).
+    // Metadata contains relative days (e.g. 180, 365).
+    let duration_days: u32 = session["metadata"]["expiry_days"]
         .as_str()
         .and_then(|s| s.parse().ok())
         .unwrap_or(30); // default to 30-day
 
+    // Convert relative days to absolute days-since-epoch for the key.
+    let now_days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86400;
+    let expiry_absolute = (now_days as u32) + duration_days;
+
     // Generate email-bound Pro license key
-    let key = license::generate_for_email(&email, expiry_days, 1); // edition_flags=1 = Pro
+    let key = license::generate_for_email(&email, expiry_absolute, 1); // edition_flags=1 = Pro
 
     // Send license key to customer
-    send_license_email(&email, &key, expiry_days)?;
+    send_license_email(&email, &key, duration_days)?;
+
+    // Schedule a reminder email for the last day before expiry
+    schedule_expiry_reminder(&email, &key, duration_days)?;
 
     Ok(format!(
-        "License sent to {email} (session={session_id}, expiry={expiry_days}d)"
+        "License sent to {email} (session={session_id}, duration={duration_days}d, expires=day {expiry_absolute})"
     ))
 }
 
@@ -204,6 +216,151 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+/// Schedule a reminder email to be sent on the last day before license expiry.
+///
+/// Writes a reminder file to `~/.local/share/precc/reminders/` that the
+/// `precc webhook check-reminders` cron job picks up daily.
+fn schedule_expiry_reminder(email: &str, key: &str, duration_days: u32) -> Result<()> {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Send reminder 1 day before expiry
+    let remind_at_secs = now_secs + ((duration_days as u64).saturating_sub(1)) * 86400;
+
+    let reminders_dir = if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home).join(".local/share/precc/reminders")
+    } else {
+        return Ok(()); // Can't schedule without HOME
+    };
+    std::fs::create_dir_all(&reminders_dir)?;
+
+    let reminder = serde_json::json!({
+        "email": email,
+        "key": key,
+        "duration_days": duration_days,
+        "remind_at": remind_at_secs,
+        "created_at": now_secs,
+    });
+
+    let filename = format!("{}-{}.json", remind_at_secs, email.replace('@', "_at_"));
+    std::fs::write(
+        reminders_dir.join(&filename),
+        serde_json::to_string_pretty(&reminder)?,
+    )?;
+
+    eprintln!("  Reminder scheduled for {filename}");
+    Ok(())
+}
+
+/// Check all pending reminders and send emails for any that are due.
+/// Called by `precc webhook check-reminders` (intended for daily cron).
+pub fn check_reminders() -> Result<u32> {
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME not set"))?;
+    let reminders_dir = std::path::PathBuf::from(home).join(".local/share/precc/reminders");
+
+    if !reminders_dir.exists() {
+        return Ok(0);
+    }
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut sent = 0u32;
+
+    for entry in std::fs::read_dir(&reminders_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path)?;
+        let reminder: serde_json::Value = serde_json::from_str(&content)?;
+
+        let remind_at = reminder["remind_at"].as_u64().unwrap_or(0);
+        if now_secs < remind_at {
+            continue; // Not due yet
+        }
+
+        let email = reminder["email"].as_str().unwrap_or("");
+        let duration_days = reminder["duration_days"].as_u64().unwrap_or(0) as u32;
+
+        if !email.is_empty() {
+            match send_expiry_reminder_email(email, duration_days) {
+                Ok(()) => {
+                    eprintln!("  Sent expiry reminder to {email}");
+                    sent += 1;
+                }
+                Err(e) => {
+                    eprintln!("  Failed to send reminder to {email}: {e}");
+                }
+            }
+        }
+
+        // Remove the reminder file whether sent or not (avoid retrying forever)
+        let _ = std::fs::remove_file(&path);
+    }
+
+    Ok(sent)
+}
+
+/// Send a license expiry reminder email.
+fn send_expiry_reminder_email(to: &str, duration_days: u32) -> Result<()> {
+    let plan = if duration_days >= 365 {
+        "12-month"
+    } else {
+        "6-month"
+    };
+
+    let body = format!(
+        "Hi,\n\
+         \n\
+         Your PRECC Pro license ({plan} plan) expires tomorrow.\n\
+         \n\
+         To renew, visit: https://github.com/sponsors/yijunyu\n\
+         \n\
+         After payment, you'll receive a new license key automatically.\n\
+         \n\
+         If you've already renewed, you can ignore this email.\n\
+         \n\
+         — PRECC Team\n\
+         https://github.com/peria-ai/precc-cc\n"
+    );
+
+    let message = format!(
+        "From: PRECC <{FROM_EMAIL}>\n\
+         To: {to}\n\
+         Subject: Your PRECC Pro license expires tomorrow\n\
+         Content-Type: text/plain; charset=utf-8\n\
+         \n\
+         {body}"
+    );
+
+    let mut child = std::process::Command::new("sendmail")
+        .args(["-t", "-f", FROM_EMAIL])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run sendmail: {e}"))?;
+
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("No stdin on sendmail"))?
+        .write_all(message.as_bytes())
+        .map_err(|e| anyhow::anyhow!("Failed to write to sendmail: {e}"))?;
+
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("sendmail exited with status {}", status);
+    }
+
+    Ok(())
 }
 
 /// Send the license key to the customer via local sendmail.
