@@ -216,8 +216,138 @@ if ! echo ":${PATH}:" | grep -q ":${BIN_DIR}:"; then
     echo "  Then restart your shell or run: export PATH=\"${BIN_DIR}:\$PATH\""
 fi
 
+# ===========================================================================
+# Helper: download a GitHub release binary
+#   Usage: gh_install_binary <repo> <binary_name> <url>
+# ===========================================================================
+gh_install_binary() {
+    local repo="$1" name="$2" url="$3"
+    echo "  Downloading ${name} from ${repo}..."
+    if curl -fsSL --progress-bar -o "${TMP}/${name}.tar.gz" "${url}" 2>/dev/null; then
+        tar -xzf "${TMP}/${name}.tar.gz" -C "${TMP}" 2>/dev/null || true
+        # Search for the binary in extracted files
+        local found
+        found="$(find "${TMP}" -name "${name}" -type f 2>/dev/null | head -1)"
+        if [[ -n "${found}" ]]; then
+            install -m 755 "${found}" "${BIN_DIR}/${name}"
+            echo "  Installed ${name} to ${BIN_DIR}/${name}"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# ===========================================================================
+# Helper: resolve latest GitHub release tag
+#   Usage: gh_latest_tag <repo>
+# ===========================================================================
+gh_latest_tag() {
+    curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
+        | grep '"tag_name"' \
+        | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
 # ---------------------------------------------------------------------------
-# Optional: install cocoindex-code (AST-driven semantic code search)
+# Optional: install lean-ctx (pre-built binary, ~2 seconds)
+# ---------------------------------------------------------------------------
+install_lean_ctx() {
+    if command -v lean-ctx &>/dev/null; then
+        echo "  lean-ctx already installed: $(lean-ctx --version 2>/dev/null)"
+        return 0
+    fi
+
+    echo ""
+    echo "Installing lean-ctx (deep output compression — saves up to 88% of context tokens)..."
+
+    # Try pre-built binary first (fast: ~2s download)
+    local tag
+    tag="$(gh_latest_tag yvgude/lean-ctx)" || true
+    if [[ -n "${tag}" ]]; then
+        local ver="${tag#v}"
+        local url="https://github.com/yvgude/lean-ctx/releases/download/${tag}/lean-ctx-${TARGET}.tar.gz"
+        if gh_install_binary "yvgude/lean-ctx" "lean-ctx" "${url}"; then
+            return 0
+        fi
+    fi
+
+    # Fallback: universal installer
+    if curl -fsSL https://leanctx.com/install.sh 2>/dev/null | bash; then
+        echo "  Installed lean-ctx via universal installer"
+        return 0
+    fi
+
+    # Last resort: cargo (slow, compiles from source)
+    if command -v cargo &>/dev/null; then
+        echo "  Building lean-ctx from source (this may take a few minutes)..."
+        cargo install lean-ctx 2>/dev/null && echo "  Installed lean-ctx via cargo" && return 0
+    fi
+
+    echo "  Skipped: install lean-ctx manually — see https://github.com/yvgude/lean-ctx"
+    echo "  Then set PRECC_LEAN_CTX=1 to enable deep output compression."
+    return 1
+}
+
+wire_mcp_lean_ctx() {
+    if ! command -v lean-ctx &>/dev/null; then
+        return 1
+    fi
+
+    # Add lean-ctx MCP server to Claude Code
+    if command -v claude &>/dev/null; then
+        claude mcp add lean-ctx -- lean-ctx 2>/dev/null \
+            && echo "  Configured lean-ctx MCP server for Claude Code" \
+            || echo "  Note: run 'claude mcp add lean-ctx -- lean-ctx' manually to enable MCP"
+    else
+        echo "  To enable MCP integration, run:"
+        echo "    claude mcp add lean-ctx -- lean-ctx"
+    fi
+}
+
+install_lean_ctx
+wire_mcp_lean_ctx
+
+# ---------------------------------------------------------------------------
+# Optional: install Nushell (pre-built binary, ~2 seconds)
+# ---------------------------------------------------------------------------
+install_nushell() {
+    if command -v nu &>/dev/null; then
+        echo "  Nushell already installed: $(nu --version 2>/dev/null)"
+        return 0
+    fi
+
+    echo ""
+    echo "Installing Nushell (structured shell for compact CLI output)..."
+
+    # Try pre-built binary first (fast: ~2s download)
+    local tag
+    tag="$(gh_latest_tag nushell/nushell)" || true
+    if [[ -n "${tag}" ]]; then
+        local url="https://github.com/nushell/nushell/releases/download/${tag}/nu-${tag}-${TARGET}.tar.gz"
+        if gh_install_binary "nushell/nushell" "nu" "${url}"; then
+            return 0
+        fi
+    fi
+
+    # Fallback: brew on macOS
+    if [[ "${OS}" == "Darwin" ]] && command -v brew &>/dev/null; then
+        brew install nushell 2>/dev/null && echo "  Installed Nushell via Homebrew" && return 0
+    fi
+
+    # Last resort: cargo (very slow, compiles 300+ crates)
+    if command -v cargo &>/dev/null; then
+        echo "  Building Nushell from source (this may take several minutes)..."
+        cargo install nu 2>/dev/null && echo "  Installed Nushell via cargo" && return 0
+    fi
+
+    echo "  Skipped: install Nushell manually from https://www.nushell.sh/book/installation.html"
+    echo "  Then set PRECC_NUSHELL=1 to enable compact output rewriting."
+    return 1
+}
+
+install_nushell
+
+# ---------------------------------------------------------------------------
+# Optional: install cocoindex-code (Python package — no pre-built binary)
 # ---------------------------------------------------------------------------
 install_cocoindex_code() {
     if command -v ccc &>/dev/null; then
@@ -227,11 +357,11 @@ install_cocoindex_code() {
 
     echo ""
     echo "Installing cocoindex-code (AST-driven semantic code search)..."
-    echo "  (This may take 1-2 minutes — compiling native tree-sitter extensions)"
 
+    # uv is fastest (uses pre-built wheels when available)
     if command -v uv &>/dev/null; then
         echo "  Using uv..."
-        timeout 180 uv tool install --upgrade cocoindex-code --prerelease explicit && echo "  Installed cocoindex-code via uv" && return 0
+        timeout 120 uv tool install --upgrade cocoindex-code --prerelease explicit && echo "  Installed cocoindex-code via uv" && return 0
         echo "  uv install failed or timed out"
     fi
 
@@ -271,120 +401,18 @@ install_cocoindex_code
 wire_mcp_cocoindex
 
 # ---------------------------------------------------------------------------
-# Optional: install Nushell (structured output for further token savings)
-# ---------------------------------------------------------------------------
-install_nushell() {
-    if command -v nu &>/dev/null; then
-        echo "  Nushell already installed: $(nu --version 2>/dev/null)"
-        return 0
-    fi
-
-    echo ""
-    echo "Installing Nushell (structured shell for compact CLI output)..."
-
-    case "${OS}" in
-        Linux)
-            if ! command -v cargo &>/dev/null; then
-                echo "  Rust/Cargo not found — installing via rustup..."
-                curl -fsSL https://sh.rustup.rs | sh -s -- -y 2>/dev/null
-                # shellcheck disable=SC1091
-                source "${HOME}/.cargo/env" 2>/dev/null || true
-            fi
-            if command -v cargo &>/dev/null; then
-                cargo install nu 2>/dev/null && echo "  Installed Nushell via cargo" && return 0
-            fi
-            # Try GitHub release binary
-            local NU_VERSION
-            NU_VERSION="$(curl -fsSL https://api.github.com/repos/nushell/nushell/releases/latest \
-                | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')" 2>/dev/null || true
-            if [[ -n "${NU_VERSION}" ]]; then
-                local NU_ARCHIVE="nu-${NU_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz"
-                local NU_URL="https://github.com/nushell/nushell/releases/download/${NU_VERSION}/${NU_ARCHIVE}"
-                if curl -fsSL -o "${TMP}/nu.tar.gz" "${NU_URL}" 2>/dev/null; then
-                    tar -xzf "${TMP}/nu.tar.gz" -C "${TMP}" 2>/dev/null
-                    local NU_BIN
-                    NU_BIN="$(find "${TMP}" -name nu -type f -executable 2>/dev/null | head -1)"
-                    if [[ -n "${NU_BIN}" ]]; then
-                        install -m 755 "${NU_BIN}" "${BIN_DIR}/nu"
-                        echo "  Installed Nushell ${NU_VERSION} to ${BIN_DIR}/nu"
-                        return 0
-                    fi
-                fi
-            fi
-            ;;
-        Darwin)
-            if command -v brew &>/dev/null; then
-                brew install nushell 2>/dev/null && echo "  Installed Nushell via Homebrew" && return 0
-            fi
-            ;;
-    esac
-
-    echo "  Skipped: install Nushell manually from https://www.nushell.sh/book/installation.html"
-    echo "  Then set PRECC_NUSHELL=1 to enable compact output rewriting."
-    return 1
-}
-
-install_nushell
-
-# ---------------------------------------------------------------------------
-# Optional: install lean-ctx (deep output compression for further token savings)
-# ---------------------------------------------------------------------------
-install_lean_ctx() {
-    if command -v lean-ctx &>/dev/null; then
-        echo "  lean-ctx already installed: $(lean-ctx --version 2>/dev/null)"
-        return 0
-    fi
-
-    echo ""
-    echo "Installing lean-ctx (deep output compression — saves up to 88% of context tokens)..."
-
-    if command -v cargo &>/dev/null; then
-        cargo install lean-ctx 2>/dev/null && echo "  Installed lean-ctx via cargo" && return 0
-    fi
-
-    # Try the universal installer
-    if curl -fsSL https://leanctx.com/install.sh | bash 2>/dev/null; then
-        echo "  Installed lean-ctx via universal installer"
-        return 0
-    fi
-
-    echo "  Skipped: install lean-ctx manually — see https://github.com/yvgude/lean-ctx"
-    echo "  Then set PRECC_LEAN_CTX=1 to enable deep output compression."
-    return 1
-}
-
-wire_mcp_lean_ctx() {
-    if ! command -v lean-ctx &>/dev/null; then
-        return 1
-    fi
-
-    # Add lean-ctx MCP server to Claude Code
-    if command -v claude &>/dev/null; then
-        claude mcp add lean-ctx -- lean-ctx 2>/dev/null \
-            && echo "  Configured lean-ctx MCP server for Claude Code" \
-            || echo "  Note: run 'claude mcp add lean-ctx -- lean-ctx' manually to enable MCP"
-    else
-        echo "  To enable MCP integration, run:"
-        echo "    claude mcp add lean-ctx -- lean-ctx"
-    fi
-}
-
-install_lean_ctx
-wire_mcp_lean_ctx
-
-# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""
 echo "PRECC ${VERSION} installed to ${BIN_DIR}."
 echo "Run 'precc init' to initialize databases."
 echo ""
+if command -v lean-ctx &>/dev/null; then
+    echo "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
+fi
 if command -v nu &>/dev/null; then
     echo "Nushell is available. Set PRECC_NUSHELL=1 to enable compact output rewriting."
 fi
 if command -v ccc &>/dev/null; then
     echo "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
-fi
-if command -v lean-ctx &>/dev/null; then
-    echo "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
 fi
