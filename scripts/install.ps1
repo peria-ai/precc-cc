@@ -173,105 +173,51 @@ try {
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 }
 
-# ---------------------------------------------------------------------------
-# Optional: install cocoindex-code (AST-driven semantic code search)
-# ---------------------------------------------------------------------------
-Write-Host ""
-$hasPipx = Get-Command "pipx" -ErrorAction SilentlyContinue
-$hasUv = Get-Command "uv" -ErrorAction SilentlyContinue
-$hasPip = Get-Command "pip3" -ErrorAction SilentlyContinue
-
-$cccInstalled = $false
-if ($hasPipx) {
-    Write-Host "Installing cocoindex-code via pipx..."
-    $null = pipx install cocoindex-code *>&1
-    if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pipx" }
-    else { Write-Host "  Skipped cocoindex-code (pipx install failed — network issue?)" }
-} elseif ($hasUv) {
-    Write-Host "Installing cocoindex-code via uv..."
-    $null = uv tool install --upgrade cocoindex-code --prerelease explicit *>&1
-    if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via uv" }
-    else { Write-Host "  Skipped cocoindex-code (uv install failed — network issue?)" }
-} elseif ($hasPip) {
-    Write-Host "Installing cocoindex-code via pip3..."
-    $null = pip3 install --user cocoindex-code *>&1
-    if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pip3" }
-    else { Write-Host "  Skipped cocoindex-code (pip3 install failed — network issue?)" }
-} else {
-    Write-Host "  Skipped cocoindex-code: install pipx, uv, or pip3 first, then run:"
-    Write-Host "    pipx install cocoindex-code"
-}
-
-if ($cccInstalled) {
-    $hasClaude = Get-Command "claude" -ErrorAction SilentlyContinue
-    if ($hasClaude) {
-        claude mcp add cocoindex-code -- ccc mcp 2>$null
-        Write-Host "  Configured cocoindex-code MCP server for Claude Code"
-    } else {
-        Write-Host "  To enable MCP integration, run:"
-        Write-Host "    claude mcp add cocoindex-code -- ccc mcp"
+# ===========================================================================
+# Helper: resolve latest GitHub release tag
+# ===========================================================================
+function Get-LatestTag($repo) {
+    try {
+        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" `
+            -Headers @{ "User-Agent" = "precc-installer" }
+        return $rel.tag_name
+    } catch {
+        return ""
     }
 }
 
-# ---------------------------------------------------------------------------
-# Optional: install Nushell (structured output for further token savings)
-# ---------------------------------------------------------------------------
-Write-Host ""
-$hasNu = Get-Command "nu" -ErrorAction SilentlyContinue
-$nuInstalled = $false
-
-if ($hasNu) {
-    Write-Host "  Nushell already installed: $(nu --version 2>$null)"
-    $nuInstalled = $true
-} else {
-    Write-Host "Installing Nushell (structured shell for compact CLI output)..."
-
-    # Try winget first (fast, prebuilt binary)
-    $hasWinget = Get-Command "winget" -ErrorAction SilentlyContinue
-    if ($hasWinget) {
-        Write-Host "  Installing Nushell via winget..."
-        $null = winget install nushell --accept-source-agreements --accept-package-agreements *>&1
-        if ($LASTEXITCODE -eq 0) {
-            $nuInstalled = $true
-            Write-Host "  Installed Nushell via winget"
+# ===========================================================================
+# Helper: download and install a GitHub release binary (zip)
+# ===========================================================================
+function Install-GhBinary($repo, $binaryName, $url) {
+    $tmpZip = Join-Path $env:TEMP "precc-dep-$(New-Guid).zip"
+    $tmpExtract = Join-Path $env:TEMP "precc-dep-$(New-Guid)"
+    try {
+        Write-Host "  Downloading $binaryName from $repo..."
+        Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing
+        New-Item -ItemType Directory -Path $tmpExtract -Force | Out-Null
+        Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
+        # Find the binary recursively
+        $found = Get-ChildItem -Path $tmpExtract -Filter "$binaryName.exe" -Recurse -File | Select-Object -First 1
+        if (-not $found) {
+            $found = Get-ChildItem -Path $tmpExtract -Filter $binaryName -Recurse -File | Select-Object -First 1
         }
-    }
-
-    # Fall back to cargo (slower, compiles from source)
-    if (-not $nuInstalled) {
-        $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-        if (-not $hasCargo) {
-            Write-Host "  Rust/Cargo not found — installing via rustup..."
-            $rustupUrl = "https://win.rustup.rs/x86_64"
-            $rustupPath = Join-Path $env:TEMP "rustup-init.exe"
-            try {
-                Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupPath -UseBasicParsing
-                & $rustupPath -y --default-toolchain stable 2>$null
-                $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-                $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-            } catch {
-                Write-Host "  Failed to install Rust via rustup"
-            }
+        if ($found) {
+            Copy-Item -Path $found.FullName -Destination (Join-Path $InstallDir "$binaryName.exe") -Force
+            Write-Host "  Installed $binaryName to $InstallDir"
+            return $true
         }
-
-        if ($hasCargo) {
-            Write-Host "  Installing Nushell via cargo (this may take a few minutes)..."
-            $null = cargo install nu *>&1
-            if ($LASTEXITCODE -eq 0) {
-                $nuInstalled = $true
-                Write-Host "  Installed Nushell via cargo"
-            }
-        }
+    } catch {
+        # Download or extract failed
+    } finally {
+        Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $tmpExtract -ErrorAction SilentlyContinue
     }
-
-    if (-not $nuInstalled) {
-        Write-Host "  Skipped: install Nushell manually from https://www.nushell.sh/book/installation.html"
-        Write-Host "  Then set PRECC_NUSHELL=1 to enable compact output rewriting."
-    }
+    return $false
 }
 
 # ---------------------------------------------------------------------------
-# Optional: install lean-ctx (deep output compression for further token savings)
+# Optional: install lean-ctx (pre-built binary, ~2 seconds)
 # ---------------------------------------------------------------------------
 Write-Host ""
 $hasLeanCtx = Get-Command "lean-ctx" -ErrorAction SilentlyContinue
@@ -283,13 +229,23 @@ if ($hasLeanCtx) {
 } else {
     Write-Host "Installing lean-ctx (deep output compression — saves up to 88% of context tokens)..."
 
-    $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
-    if ($hasCargo) {
-        Write-Host "  Installing lean-ctx via cargo..."
-        $null = cargo install lean-ctx *>&1
-        if ($LASTEXITCODE -eq 0) {
-            $leanCtxInstalled = $true
-            Write-Host "  Installed lean-ctx via cargo"
+    # Try pre-built binary first (fast: ~2s)
+    $leanTag = Get-LatestTag "yvgude/lean-ctx"
+    if ($leanTag) {
+        $leanUrl = "https://github.com/yvgude/lean-ctx/releases/download/$leanTag/lean-ctx-x86_64-pc-windows-msvc.zip"
+        $leanCtxInstalled = Install-GhBinary "yvgude/lean-ctx" "lean-ctx" $leanUrl
+    }
+
+    # Fallback: cargo (slow)
+    if (-not $leanCtxInstalled) {
+        $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+        if ($hasCargo) {
+            Write-Host "  Building lean-ctx from source (this may take a few minutes)..."
+            $null = cargo install lean-ctx *>&1
+            if ($LASTEXITCODE -eq 0) {
+                $leanCtxInstalled = $true
+                Write-Host "  Installed lean-ctx via cargo"
+            }
         }
     }
 
@@ -311,17 +267,117 @@ if ($leanCtxInstalled) {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: install Nushell (pre-built binary via winget or GitHub, ~2 seconds)
+# ---------------------------------------------------------------------------
+Write-Host ""
+$hasNu = Get-Command "nu" -ErrorAction SilentlyContinue
+$nuInstalled = $false
+
+if ($hasNu) {
+    Write-Host "  Nushell already installed: $(nu --version 2>$null)"
+    $nuInstalled = $true
+} else {
+    Write-Host "Installing Nushell (structured shell for compact CLI output)..."
+
+    # Try winget first (fast, prebuilt)
+    $hasWinget = Get-Command "winget" -ErrorAction SilentlyContinue
+    if ($hasWinget) {
+        Write-Host "  Installing Nushell via winget..."
+        $null = winget install nushell --accept-source-agreements --accept-package-agreements *>&1
+        if ($LASTEXITCODE -eq 0) {
+            $nuInstalled = $true
+            Write-Host "  Installed Nushell via winget"
+        }
+    }
+
+    # Try GitHub release binary (fast: ~2s)
+    if (-not $nuInstalled) {
+        $nuTag = Get-LatestTag "nushell/nushell"
+        if ($nuTag) {
+            $nuUrl = "https://github.com/nushell/nushell/releases/download/$nuTag/nu-$nuTag-x86_64-pc-windows-msvc.zip"
+            $nuInstalled = Install-GhBinary "nushell/nushell" "nu" $nuUrl
+        }
+    }
+
+    # Last resort: cargo (very slow)
+    if (-not $nuInstalled) {
+        $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+        if ($hasCargo) {
+            Write-Host "  Building Nushell from source (this may take several minutes)..."
+            $null = cargo install nu *>&1
+            if ($LASTEXITCODE -eq 0) {
+                $nuInstalled = $true
+                Write-Host "  Installed Nushell via cargo"
+            }
+        }
+    }
+
+    if (-not $nuInstalled) {
+        Write-Host "  Skipped: install Nushell manually from https://www.nushell.sh/book/installation.html"
+        Write-Host "  Then set PRECC_NUSHELL=1 to enable compact output rewriting."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Optional: install cocoindex-code (Python package — no pre-built binary)
+# ---------------------------------------------------------------------------
+Write-Host ""
+$hasCcc = Get-Command "ccc" -ErrorAction SilentlyContinue
+$cccInstalled = $false
+
+if ($hasCcc) {
+    Write-Host "  cocoindex-code already installed"
+    $cccInstalled = $true
+} else {
+    Write-Host "Installing cocoindex-code (AST-driven semantic code search)..."
+
+    $hasUv = Get-Command "uv" -ErrorAction SilentlyContinue
+    $hasPipx = Get-Command "pipx" -ErrorAction SilentlyContinue
+    $hasPip = Get-Command "pip3" -ErrorAction SilentlyContinue
+
+    if ($hasUv) {
+        Write-Host "  Using uv..."
+        $null = uv tool install --upgrade cocoindex-code --prerelease explicit *>&1
+        if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via uv" }
+        else { Write-Host "  uv install failed" }
+    } elseif ($hasPipx) {
+        Write-Host "  Using pipx..."
+        $null = pipx install cocoindex-code *>&1
+        if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pipx" }
+        else { Write-Host "  pipx install failed" }
+    } elseif ($hasPip) {
+        Write-Host "  Using pip3..."
+        $null = pip3 install --user cocoindex-code *>&1
+        if ($LASTEXITCODE -eq 0) { $cccInstalled = $true; Write-Host "  Installed cocoindex-code via pip3" }
+        else { Write-Host "  pip3 install failed" }
+    } else {
+        Write-Host "  Skipped: install uv, pipx, or pip3 first, then run: pipx install cocoindex-code"
+    }
+}
+
+if ($cccInstalled) {
+    $hasClaude = Get-Command "claude" -ErrorAction SilentlyContinue
+    if ($hasClaude) {
+        claude mcp add cocoindex-code -- ccc mcp 2>$null
+        Write-Host "  Configured cocoindex-code MCP server for Claude Code"
+    } else {
+        Write-Host "  To enable MCP integration, run:"
+        Write-Host "    claude mcp add cocoindex-code -- ccc mcp"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "PRECC $Version installed to $InstallDir."
 Write-Host "Run 'precc init' to initialize databases."
+if ($leanCtxInstalled) {
+    Write-Host "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
+}
 if ($nuInstalled) {
     Write-Host "Nushell is available. Set PRECC_NUSHELL=1 to enable compact output rewriting."
 }
 if ($cccInstalled) {
     Write-Host "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
-}
-if ($leanCtxInstalled) {
-    Write-Host "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
 }
