@@ -21,8 +21,8 @@
 //! - Schema init skipped (precc init handles it)
 
 use precc_core::{
-    agent_propagate, ccc, context, db, geofence, grep_filter, license, nushell, post_observe,
-    read_filter, rtk, skills, update_check,
+    agent_propagate, ccc, context, db, geofence, grep_filter, lean_ctx, license, nushell,
+    post_observe, read_filter, rtk, skills, update_check,
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -137,6 +137,7 @@ fn parse_session_metrics(since_ts: u64) -> StatuslineCounts {
     // Token savings estimates per event type (conservative)
     const TOKENS_PER_CD: u64 = 300;
     const TOKENS_PER_RTK: u64 = 175;
+    const TOKENS_PER_LEAN_CTX: u64 = 350; // lean-ctx compresses 70-80% of output
     const TOKENS_PER_SKILL: u64 = 250;
     const TOKENS_PER_CCC_BYTE: f64 = 0.25; // ~4 bytes per token
 
@@ -163,6 +164,10 @@ fn parse_session_metrics(since_ts: u64) -> StatuslineCounts {
             "cd_prepend" => {
                 counts.corrections += 1;
                 counts.tokens_saved += TOKENS_PER_CD;
+            }
+            "lean_ctx_wrap" => {
+                counts.corrections += 1;
+                counts.tokens_saved += TOKENS_PER_LEAN_CTX;
             }
             "rtk_rewrite" => {
                 counts.corrections += 1;
@@ -647,6 +652,7 @@ struct Pipeline {
     had_bash_unwrap: bool,
     had_cd_prepend: bool,
     had_nushell_wrap: bool,
+    had_lean_ctx_wrap: bool,
     had_rtk_rewrite: bool,
     had_gdb_suggestion: bool,
     had_ccc_redirect: bool,
@@ -664,6 +670,7 @@ impl Pipeline {
             had_bash_unwrap: false,
             had_cd_prepend: false,
             had_nushell_wrap: false,
+            had_lean_ctx_wrap: false,
             had_rtk_rewrite: false,
             had_gdb_suggestion: false,
             had_ccc_redirect: false,
@@ -701,12 +708,18 @@ impl Pipeline {
         // Stage 4: GDB check (Pillar 2)
         self.stage_gdb();
 
-        // Stage 5: Nushell wrapping (experimental) or RTK rewriting
+        // Stage 5: Output compression — mutually exclusive, priority order:
+        //   5a: Nushell (PRECC_NUSHELL=1)
+        //   5b: lean-ctx (PRECC_LEAN_CTX=1) — external output compression
+        //   5c: RTK (fallback)
         if nushell::nushell_mode_enabled() {
             self.stage_nushell();
         }
-        if !self.had_nushell_wrap {
-            self.stage_rtk(); // Fallback: RTK if nushell didn't fire
+        if !self.had_nushell_wrap && lean_ctx::lean_ctx_mode_enabled() {
+            self.stage_lean_ctx();
+        }
+        if !self.had_nushell_wrap && !self.had_lean_ctx_wrap {
+            self.stage_rtk();
         }
 
         // Stage 6: CCC semantic search redirect (Pillar 2b)
@@ -1000,7 +1013,26 @@ impl Pipeline {
         }
     }
 
-    /// Stage 5b: RTK command rewriting.
+    /// Stage 5b: lean-ctx output compression (external tool).
+    ///
+    /// Wraps commands in `lean-ctx -c '...'` for deep output compression.
+    /// Only fires when `PRECC_LEAN_CTX=1` is set and lean-ctx is available.
+    /// lean-ctx handles its own compression decisions internally.
+    fn stage_lean_ctx(&mut self) {
+        let (prefix, cmd_part) = split_cd_prefix(&self.command);
+
+        if let Some(wrapped) = lean_ctx::wrap(cmd_part) {
+            self.command = if prefix.is_empty() {
+                wrapped
+            } else {
+                format!("{}{}", prefix, wrapped)
+            };
+            self.had_lean_ctx_wrap = true;
+            self.reasons.push("lean-ctx-wrap".to_string());
+        }
+    }
+
+    /// Stage 5c: RTK command rewriting.
     fn stage_rtk(&mut self) {
         // RTK rewriting applies to the (possibly cd-prepended) command.
         // We need to rewrite the actual command part, not the cd prefix.
@@ -1159,6 +1191,12 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
     if pipeline.had_nushell_wrap {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"nushell_wrap\",\"value\":1.0}}\n",
+            ts
+        ));
+    }
+    if pipeline.had_lean_ctx_wrap {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"lean_ctx_wrap\",\"value\":1.0}}\n",
             ts
         ));
     }

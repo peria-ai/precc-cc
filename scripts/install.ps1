@@ -271,6 +271,46 @@ if ($hasNu) {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: install lean-ctx (deep output compression for further token savings)
+# ---------------------------------------------------------------------------
+Write-Host ""
+$hasLeanCtx = Get-Command "lean-ctx" -ErrorAction SilentlyContinue
+$leanCtxInstalled = $false
+
+if ($hasLeanCtx) {
+    Write-Host "  lean-ctx already installed: $(lean-ctx --version 2>$null)"
+    $leanCtxInstalled = $true
+} else {
+    Write-Host "Installing lean-ctx (deep output compression — saves up to 88% of context tokens)..."
+
+    $hasCargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+    if ($hasCargo) {
+        Write-Host "  Installing lean-ctx via cargo..."
+        $null = cargo install lean-ctx *>&1
+        if ($LASTEXITCODE -eq 0) {
+            $leanCtxInstalled = $true
+            Write-Host "  Installed lean-ctx via cargo"
+        }
+    }
+
+    if (-not $leanCtxInstalled) {
+        Write-Host "  Skipped: install lean-ctx manually — see https://github.com/yvgude/lean-ctx"
+        Write-Host "  Then set PRECC_LEAN_CTX=1 to enable deep output compression."
+    }
+}
+
+if ($leanCtxInstalled) {
+    $hasClaude = Get-Command "claude" -ErrorAction SilentlyContinue
+    if ($hasClaude) {
+        claude mcp add lean-ctx -- lean-ctx 2>$null
+        Write-Host "  Configured lean-ctx MCP server for Claude Code"
+    } else {
+        Write-Host "  To enable MCP integration, run:"
+        Write-Host "    claude mcp add lean-ctx -- lean-ctx"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
@@ -281,4 +321,7 @@ if ($nuInstalled) {
 }
 if ($cccInstalled) {
     Write-Host "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
+}
+if ($leanCtxInstalled) {
+    Write-Host "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
 }

@@ -62,8 +62,7 @@ pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
         let method = request.method().to_string();
 
         if method != "POST" || url != "/webhook/stripe" {
-            let resp = tiny_http::Response::from_string("Not found")
-                .with_status_code(404);
+            let resp = tiny_http::Response::from_string("Not found").with_status_code(404);
             let _ = request.respond(resp);
             continue;
         }
@@ -76,8 +75,7 @@ pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
             }
             Err(e) => {
                 eprintln!("[ERR] {e}");
-                let resp = tiny_http::Response::from_string(format!("{e}"))
-                    .with_status_code(400);
+                let resp = tiny_http::Response::from_string(format!("{e}")).with_status_code(400);
                 let _ = request.respond(resp);
             }
         }
@@ -87,10 +85,7 @@ pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
 }
 
 /// Handle a single Stripe webhook request.
-fn handle_stripe_webhook(
-    request: &mut tiny_http::Request,
-    secret: &str,
-) -> Result<String> {
+fn handle_stripe_webhook(request: &mut tiny_http::Request, secret: &str) -> Result<String> {
     // Read body
     let mut body = String::new();
     request
@@ -113,9 +108,7 @@ fn handle_stripe_webhook(
     let event: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("Invalid JSON: {e}"))?;
 
-    let event_type = event["type"]
-        .as_str()
-        .unwrap_or("");
+    let event_type = event["type"].as_str().unwrap_or("");
 
     match event_type {
         "checkout.session.completed" => handle_checkout_completed(&event),
@@ -137,9 +130,7 @@ fn handle_checkout_completed(event: &serde_json::Value) -> Result<String> {
         .trim()
         .to_lowercase();
 
-    let session_id = session["id"]
-        .as_str()
-        .unwrap_or("unknown");
+    let session_id = session["id"].as_str().unwrap_or("unknown");
 
     // Determine expiry from metadata (set by stripe-setup.sh)
     let expiry_days: u32 = session["metadata"]["expiry_days"]

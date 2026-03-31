@@ -53,6 +53,8 @@ pub struct PillarTelemetry {
     pub skill_tokens_saved: f64,
     pub mined_preventions: i64,
     pub mined_tokens_saved: f64,
+    pub lean_ctx_wraps: i64,
+    pub lean_ctx_tokens_saved: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,6 +228,13 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
 
     // Use conservative token model (same as cmd_savings)
     let rtk_avg = 175.0; // weighted avg across rule categories
+    let lean_ctx_wraps: i64 = if let Ok(conn) = db::open_metrics(data_dir) {
+        metrics::summary(&conn, metrics::MetricType::Custom("lean_ctx_wrap"))?
+            .map(|s| s.count as i64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
     let pillars = PillarTelemetry {
         rtk_rewrites,
         rtk_tokens_saved: rtk_rewrites as f64 * rtk_avg,
@@ -235,6 +244,8 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         skill_tokens_saved: skill_activations_total as f64 * TOKENS_PER_SKILL_ACTIVATION,
         mined_preventions,
         mined_tokens_saved: mined_preventions as f64 * 200.0,
+        lean_ctx_wraps,
+        lean_ctx_tokens_saved: lean_ctx_wraps as f64 * 350.0,
     };
 
     // Hook latency

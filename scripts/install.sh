@@ -316,6 +316,52 @@ install_nushell() {
 install_nushell
 
 # ---------------------------------------------------------------------------
+# Optional: install lean-ctx (deep output compression for further token savings)
+# ---------------------------------------------------------------------------
+install_lean_ctx() {
+    if command -v lean-ctx &>/dev/null; then
+        echo "  lean-ctx already installed: $(lean-ctx --version 2>/dev/null)"
+        return 0
+    fi
+
+    echo ""
+    echo "Installing lean-ctx (deep output compression — saves up to 88% of context tokens)..."
+
+    if command -v cargo &>/dev/null; then
+        cargo install lean-ctx 2>/dev/null && echo "  Installed lean-ctx via cargo" && return 0
+    fi
+
+    # Try the universal installer
+    if curl -fsSL https://leanctx.com/install.sh | bash 2>/dev/null; then
+        echo "  Installed lean-ctx via universal installer"
+        return 0
+    fi
+
+    echo "  Skipped: install lean-ctx manually — see https://github.com/yvgude/lean-ctx"
+    echo "  Then set PRECC_LEAN_CTX=1 to enable deep output compression."
+    return 1
+}
+
+wire_mcp_lean_ctx() {
+    if ! command -v lean-ctx &>/dev/null; then
+        return 1
+    fi
+
+    # Add lean-ctx MCP server to Claude Code
+    if command -v claude &>/dev/null; then
+        claude mcp add lean-ctx -- lean-ctx 2>/dev/null \
+            && echo "  Configured lean-ctx MCP server for Claude Code" \
+            || echo "  Note: run 'claude mcp add lean-ctx -- lean-ctx' manually to enable MCP"
+    else
+        echo "  To enable MCP integration, run:"
+        echo "    claude mcp add lean-ctx -- lean-ctx"
+    fi
+}
+
+install_lean_ctx
+wire_mcp_lean_ctx
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""
@@ -327,4 +373,7 @@ if command -v nu &>/dev/null; then
 fi
 if command -v ccc &>/dev/null; then
     echo "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."
+fi
+if command -v lean-ctx &>/dev/null; then
+    echo "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
 fi

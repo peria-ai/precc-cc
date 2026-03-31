@@ -1,0 +1,166 @@
+//! lean-ctx integration — thin adapter for external output compression.
+//!
+//! lean-ctx (<https://github.com/yvgude/lean-ctx>) is an external tool that compresses
+//! CLI output to reduce token consumption. PRECC delegates output compression to lean-ctx
+//! when available, while continuing to handle error prevention (cd prepend, skills, mining).
+//!
+//! # Activation
+//!
+//! Set `PRECC_LEAN_CTX=1` to enable lean-ctx wrapping (replaces RTK stage in the pipeline).
+//! When lean-ctx is not available or the env var is unset, the pipeline falls through to RTK.
+//!
+//! # Interface boundary
+//!
+//! PRECC knows exactly one thing about lean-ctx: it is a CLI binary invoked as
+//! `lean-ctx -c "command"`. No lean-ctx internals are assumed or reimplemented here.
+//! Token savings from output compression belong to lean-ctx, not PRECC.
+
+use std::sync::{LazyLock, OnceLock};
+
+// =============================================================================
+// Availability detection (cached, mirrors nushell.rs / rtk.rs pattern)
+// =============================================================================
+
+/// Check if the `lean-ctx` binary is available on PATH.
+/// Cached via `LazyLock` — only scans once per process.
+pub fn lean_ctx_available() -> bool {
+    static AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
+        // Fast path: check cached marker file
+        if let Ok(home) = std::env::var("HOME") {
+            let cache = std::path::Path::new(&home).join(".local/share/precc/.lean_ctx_path");
+            if let Ok(cached_path) = std::fs::read_to_string(&cache) {
+                let p = cached_path.trim();
+                if !p.is_empty() && std::path::Path::new(p).is_file() {
+                    return true;
+                }
+            }
+
+            // Check common locations before full PATH scan
+            let common = [
+                format!("{home}/.cargo/bin/lean-ctx"),
+                "/usr/local/bin/lean-ctx".to_string(),
+                "/usr/bin/lean-ctx".to_string(),
+            ];
+            for path in &common {
+                if std::path::Path::new(path).is_file() {
+                    let _ = std::fs::write(&cache, path);
+                    return true;
+                }
+            }
+        }
+
+        // Full PATH scan as fallback
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in path_var.split(':') {
+                let candidate = std::path::Path::new(dir).join("lean-ctx");
+                if candidate.is_file() {
+                    if let Ok(home) = std::env::var("HOME") {
+                        let cache =
+                            std::path::Path::new(&home).join(".local/share/precc/.lean_ctx_path");
+                        let _ = std::fs::write(&cache, candidate.to_string_lossy().as_ref());
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    });
+    *AVAILABLE
+}
+
+/// Check if lean-ctx mode is enabled via `PRECC_LEAN_CTX` env var.
+/// Also returns false if `LEAN_CTX_ACTIVE` is already set (lean-ctx's own
+/// double-wrap guard), preventing infinite recursion.
+/// Cached via `OnceLock` — zero cost after first check.
+pub fn lean_ctx_mode_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        // If lean-ctx is already running this command, don't double-wrap.
+        if std::env::var("LEAN_CTX_ACTIVE").is_ok() {
+            return false;
+        }
+        std::env::var("PRECC_LEAN_CTX")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "benchmark")
+            .unwrap_or(false)
+            && lean_ctx_available()
+    })
+}
+
+// =============================================================================
+// Command wrapping
+// =============================================================================
+
+/// Shell-quote a string using single quotes.
+/// Internal single quotes are escaped as `'\''`.
+fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Wrap a command in `lean-ctx -c '...'` for output compression.
+///
+/// Returns `Some(wrapped)` if wrapping is appropriate, `None` otherwise.
+/// lean-ctx decides internally which commands to compress and how.
+pub fn wrap(command: &str) -> Option<String> {
+    // Already wrapped — prevent double-wrapping
+    if command.contains("lean-ctx") {
+        return None;
+    }
+
+    // Heredocs break shell quoting
+    if command.contains("<<") {
+        return None;
+    }
+
+    Some(format!("lean-ctx -c {}", shell_quote(command)))
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_basic_command() {
+        let result = wrap("cargo test").unwrap();
+        assert_eq!(result, "lean-ctx -c 'cargo test'");
+    }
+
+    #[test]
+    fn wrap_command_with_single_quotes() {
+        let result = wrap("echo 'hello world'").unwrap();
+        assert_eq!(result, "lean-ctx -c 'echo '\\''hello world'\\'''");
+    }
+
+    #[test]
+    fn wrap_skips_already_wrapped() {
+        assert!(wrap("lean-ctx -c 'cargo test'").is_none());
+    }
+
+    #[test]
+    fn wrap_skips_heredocs() {
+        assert!(wrap("cat <<EOF\nhello\nEOF").is_none());
+    }
+
+    #[test]
+    fn shell_quote_no_specials() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_quote_with_single_quote() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+}

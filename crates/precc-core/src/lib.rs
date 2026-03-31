@@ -11,6 +11,7 @@ pub mod gdb;
 pub mod geofence;
 pub mod gha;
 pub mod grep_filter;
+pub mod lean_ctx;
 pub mod license;
 pub mod metrics;
 pub mod mining;

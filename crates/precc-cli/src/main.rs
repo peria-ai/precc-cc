@@ -338,7 +338,10 @@ fn main() -> Result<()> {
         Some(Commands::Gha { url }) => cmd_gha(url),
         Some(Commands::License { action }) => cmd_license(action),
         Some(Commands::Mail { action }) => cmd_mail(action),
-        Some(Commands::Webhook { port, stripe_secret }) => webhook::serve(port, stripe_secret),
+        Some(Commands::Webhook {
+            port,
+            stripe_secret,
+        }) => webhook::serve(port, stripe_secret),
         Some(Commands::Update {
             force,
             version,
@@ -1468,7 +1471,11 @@ fn cmd_report_with_email(email: bool) -> Result<()> {
             .context("Failed to run sendmail")?;
 
         use std::io::Write;
-        child.stdin.take().context("no stdin")?.write_all(message.as_bytes())?;
+        child
+            .stdin
+            .take()
+            .context("no stdin")?
+            .write_all(message.as_bytes())?;
         let status = child.wait()?;
         if !status.success() {
             bail!("sendmail failed with status {}", status);
@@ -1509,7 +1516,10 @@ fn generate_report_text() -> Result<String> {
     // Hook latency
     if let Ok(conn) = db::open_metrics(&data_dir) {
         if let Some(s) = metrics::summary(&conn, metrics::MetricType::HookLatency)? {
-            out.push_str(&format!("Hook Latency: {:.2}ms avg, {:.2}ms max ({} calls)\n", s.avg, s.max, s.count));
+            out.push_str(&format!(
+                "Hook Latency: {:.2}ms avg, {:.2}ms max ({} calls)\n",
+                s.avg, s.max, s.count
+            ));
         }
         if let Some(s) = metrics::summary(&conn, metrics::MetricType::RtkRewrite)? {
             out.push_str(&format!("RTK Rewrites: {} total\n", s.count));
@@ -1524,9 +1534,13 @@ fn generate_report_text() -> Result<String> {
 
     // Skill stats
     if let Ok(conn) = db::open_heuristics(&data_dir) {
-        let total: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(activated), 0) FROM skill_stats", [], |r| r.get(0)
-        ).unwrap_or(0);
+        let total: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(activated), 0) FROM skill_stats",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
         out.push_str(&format!("\nTotal skill activations: {total}\n"));
     }
 
@@ -2109,8 +2123,28 @@ fn cmd_savings(all: bool) -> Result<()> {
         println!();
     }
 
+    // ---- lean-ctx output compression (external) --------------------------
+    let lean_ctx_count: i64 = if let Ok(conn) = db::open_metrics(&data_dir) {
+        metrics::summary(&conn, metrics::MetricType::Custom("lean_ctx_wrap"))?
+            .map(|s| s.count as i64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let lean_ctx_tokens = lean_ctx_count as f64 * 350.0; // conservative: 70-80% compression
+
+    if lean_ctx_count > 0 {
+        println!("lean-ctx output compression (external)");
+        println!("--------------------------------------");
+        println!("  Commands wrapped      : {:>8}", lean_ctx_count);
+        println!("  Est. tokens/wrap      :      350  (conservative avg)");
+        println!("  Est. tokens saved     : {:>8.0}", lean_ctx_tokens);
+        println!();
+    }
+
     // ---- Grand total ---------------------------------------------------
-    let grand_total = rtk_tokens + precc_over_rtk + ccc_tokens + compress_tokens;
+    let grand_total = rtk_tokens + precc_over_rtk + ccc_tokens + compress_tokens + lean_ctx_tokens;
     let precc_pct = if grand_total > 0.0 {
         precc_over_rtk / grand_total * 100.0
     } else {
@@ -2447,9 +2481,11 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
                 // GitHub Sponsors — verify via GitHub API
                 license::activate_github()?
             } else {
-                let key = key.ok_or_else(|| anyhow::anyhow!(
-                    "License key required. Use --github for GitHub Sponsors, or provide a key."
-                ))?;
+                let key = key.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "License key required. Use --github for GitHub Sponsors, or provide a key."
+                    )
+                })?;
                 if key.starts_with("PRECC-") {
                     // PRECC native key
                     if let Some(ref email) = email {
