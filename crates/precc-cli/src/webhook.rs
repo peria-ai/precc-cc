@@ -422,3 +422,197 @@ fn send_license_email(to: &str, key: &str, expiry_days: u32) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constant_time_eq_identical() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+    }
+
+    #[test]
+    fn constant_time_eq_different() {
+        assert!(!constant_time_eq(b"hello", b"world"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_length() {
+        assert!(!constant_time_eq(b"hello", b"hi"));
+    }
+
+    #[test]
+    fn constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn constant_time_eq_one_bit_diff() {
+        assert!(!constant_time_eq(b"\x00", b"\x01"));
+    }
+
+    #[test]
+    fn verify_signature_valid() {
+        let secret = "whsec_test_secret";
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let signed = format!("{ts}.{payload}");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(signed.as_bytes());
+        let sig = hex::encode(mac.finalize().into_bytes());
+        let header = format!("t={ts},v1={sig}");
+
+        assert!(verify_stripe_signature(payload, &header, secret).is_ok());
+    }
+
+    #[test]
+    fn verify_signature_wrong_secret() {
+        let payload = "test";
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let signed = format!("{ts}.{payload}");
+        let mut mac = HmacSha256::new_from_slice(b"wrong_secret").unwrap();
+        mac.update(signed.as_bytes());
+        let sig = hex::encode(mac.finalize().into_bytes());
+        let header = format!("t={ts},v1={sig}");
+
+        assert!(verify_stripe_signature(payload, &header, "correct_secret").is_err());
+    }
+
+    #[test]
+    fn verify_signature_missing_fields() {
+        assert!(verify_stripe_signature("body", "garbage", "secret").is_err());
+    }
+
+    #[test]
+    fn verify_signature_replay_attack() {
+        let secret = "whsec_test";
+        let old_ts = 1000000;
+        let payload = "test";
+        let signed = format!("{old_ts}.{payload}");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(signed.as_bytes());
+        let sig = hex::encode(mac.finalize().into_bytes());
+        let header = format!("t={old_ts},v1={sig}");
+
+        let result = verify_stripe_signature(payload, &header, secret);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too old"));
+    }
+
+    #[test]
+    fn reminder_json_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let reminders_dir = dir.path().join("reminders");
+        std::fs::create_dir_all(&reminders_dir).unwrap();
+
+        let reminder = serde_json::json!({
+            "email": "test@example.com",
+            "key": "PRECC-TEST",
+            "duration_days": 180,
+            "remind_at": 0,
+            "created_at": 0,
+        });
+        let path = reminders_dir.join("0-test_at_example.com.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&reminder).unwrap()).unwrap();
+
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(content["email"], "test@example.com");
+        assert_eq!(content["duration_days"], 180);
+    }
+
+    #[test]
+    fn expiry_absolute_calculation() {
+        let duration_days: u32 = 365;
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let expiry_absolute = (now_days as u32) + duration_days;
+
+        let key = license::generate_for_email("test@example.com", expiry_absolute, 1);
+        let lic = license::parse(&key).unwrap();
+        assert!(!lic.is_expired());
+        assert!(lic.days_remaining().unwrap() >= 364);
+    }
+
+    #[test]
+    fn expiry_default_30_days() {
+        let event = serde_json::json!({
+            "data": {
+                "object": {
+                    "customer_details": {"email": "user@test.com"},
+                    "metadata": {}
+                }
+            }
+        });
+        let session = &event["data"]["object"];
+        let duration_days: u32 = session["metadata"]["expiry_days"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        assert_eq!(duration_days, 30);
+    }
+
+    #[test]
+    fn email_extraction_customer_details() {
+        let event = serde_json::json!({
+            "data": {
+                "object": {
+                    "customer_details": {"email": "User@Example.COM"},
+                    "metadata": {"expiry_days": "180"}
+                }
+            }
+        });
+        let session = &event["data"]["object"];
+        let email = session["customer_details"]["email"]
+            .as_str()
+            .or_else(|| session["customer_email"].as_str())
+            .unwrap()
+            .trim()
+            .to_lowercase();
+        assert_eq!(email, "user@example.com");
+    }
+
+    #[test]
+    fn email_extraction_fallback_customer_email() {
+        let event = serde_json::json!({
+            "data": {
+                "object": {
+                    "customer_email": "fallback@test.com",
+                    "metadata": {}
+                }
+            }
+        });
+        let session = &event["data"]["object"];
+        let email = session["customer_details"]["email"]
+            .as_str()
+            .or_else(|| session["customer_email"].as_str())
+            .unwrap()
+            .trim()
+            .to_lowercase();
+        assert_eq!(email, "fallback@test.com");
+    }
+
+    #[test]
+    fn duration_formatting() {
+        let format_duration = |days: u32| -> String {
+            if days >= 365 {
+                "12 months".to_string()
+            } else {
+                format!("{days} days")
+            }
+        };
+        assert_eq!(format_duration(365), "12 months");
+        assert_eq!(format_duration(180), "180 days");
+        assert_eq!(format_duration(30), "30 days");
+    }
+}

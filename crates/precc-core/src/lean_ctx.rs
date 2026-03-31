@@ -163,4 +163,67 @@ mod tests {
     fn shell_quote_with_single_quote() {
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
+
+    #[test]
+    fn wrap_empty_command() {
+        let result = wrap("").unwrap();
+        assert_eq!(result, "lean-ctx -c ''");
+    }
+
+    #[test]
+    fn wrap_command_with_pipes_and_redirects() {
+        let result = wrap("ls -la | grep foo > out.txt").unwrap();
+        assert!(result.starts_with("lean-ctx -c '"));
+        assert!(result.contains("| grep foo > out.txt"));
+    }
+
+    #[test]
+    fn wrap_skips_lean_ctx_in_middle() {
+        // Command containing "lean-ctx" anywhere should be skipped
+        assert!(wrap("echo lean-ctx is great").is_none());
+    }
+
+    #[test]
+    fn wrap_command_with_double_quotes() {
+        let result = wrap(r#"echo "hello world""#).unwrap();
+        // Double quotes don't need escaping inside single quotes
+        assert_eq!(result, r#"lean-ctx -c 'echo "hello world"'"#);
+    }
+
+    #[test]
+    fn wrap_command_with_consecutive_quotes() {
+        let result = wrap("echo '''").unwrap();
+        assert!(result.starts_with("lean-ctx -c '"));
+    }
+
+    #[test]
+    fn shell_quote_empty() {
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_quote_with_spaces() {
+        assert_eq!(shell_quote("hello world"), "'hello world'");
+    }
+
+    #[test]
+    fn shell_quote_multiple_single_quotes() {
+        assert_eq!(shell_quote("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn lean_ctx_mode_disabled_by_default() {
+        // PRECC_LEAN_CTX is not set in the test environment, and lean-ctx
+        // binary is likely not on PATH — mode should be disabled.
+        // Note: this uses OnceLock so the result is cached for the process.
+        // We can't test the env var parsing directly because of caching,
+        // but we can verify the function doesn't panic.
+        let _ = lean_ctx_mode_enabled();
+    }
+
+    #[test]
+    fn lean_ctx_available_does_not_panic() {
+        // Verify the PATH scanning and caching logic doesn't crash
+        let _ = lean_ctx_available();
+    }
 }

@@ -1388,6 +1388,53 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_lean_ctx_wraps_command() {
+        let mut p = Pipeline::new("cargo test".to_string(), ".".to_string());
+        p.stage_lean_ctx();
+        // lean-ctx wraps unconditionally (no per-command rules)
+        assert!(p.command.contains("lean-ctx -c"));
+        assert!(p.had_lean_ctx_wrap);
+        assert!(p.reasons.contains(&"lean-ctx-wrap".to_string()));
+    }
+
+    #[test]
+    fn pipeline_lean_ctx_preserves_cd_prefix() {
+        let mut p = Pipeline::new("cd /app && cargo test".to_string(), ".".to_string());
+        p.stage_lean_ctx();
+        assert!(p.command.starts_with("cd /app && lean-ctx -c"));
+        assert!(!p.command.contains("cd /app && lean-ctx -c 'cd"));
+    }
+
+    #[test]
+    fn pipeline_lean_ctx_skips_heredocs() {
+        let mut p = Pipeline::new("cat <<EOF\nhello\nEOF".to_string(), ".".to_string());
+        p.stage_lean_ctx();
+        assert!(!p.had_lean_ctx_wrap);
+        assert!(!p.modified());
+    }
+
+    #[test]
+    fn pipeline_lean_ctx_skips_already_wrapped() {
+        let mut p = Pipeline::new("lean-ctx -c 'cargo test'".to_string(), ".".to_string());
+        p.stage_lean_ctx();
+        assert!(!p.had_lean_ctx_wrap);
+    }
+
+    #[test]
+    fn pipeline_lean_ctx_flag_default_false() {
+        let p = Pipeline::new("cargo test".to_string(), ".".to_string());
+        assert!(!p.had_lean_ctx_wrap);
+    }
+
+    #[test]
+    fn pipeline_lean_ctx_metrics_reason() {
+        let mut p = Pipeline::new("git status".to_string(), ".".to_string());
+        p.stage_lean_ctx();
+        let reason = p.reason();
+        assert!(reason.contains("lean-ctx-wrap"));
+    }
+
+    #[test]
     fn emit_rewrite_produces_valid_json() {
         let tool_input = serde_json::json!({"command": "git status", "timeout": 5000});
         // Capture stdout would need more setup; just verify it doesn't panic

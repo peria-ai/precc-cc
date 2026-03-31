@@ -922,6 +922,153 @@ mod tests {
         assert!(email.is_none());
     }
 
+    // =========================================================================
+    // expiry_date() tests
+    // =========================================================================
+
+    #[test]
+    fn expiry_date_never() {
+        let lic = parse(&generate([0; 4], 0, 0)).unwrap();
+        assert_eq!(lic.expiry_date(), "never");
+    }
+
+    #[test]
+    fn expiry_date_epoch_day_one() {
+        let lic = parse(&generate([0; 4], 1, 0)).unwrap();
+        assert_eq!(lic.expiry_date(), "1970-01-02");
+    }
+
+    #[test]
+    fn expiry_date_known_date() {
+        // 2024-01-01 = day 19723
+        let lic = parse(&generate([0; 4], 19723, 0)).unwrap();
+        assert_eq!(lic.expiry_date(), "2024-01-01");
+    }
+
+    #[test]
+    fn expiry_date_leap_year() {
+        // 2024-02-29 = day 19782
+        let lic = parse(&generate([0; 4], 19782, 0)).unwrap();
+        assert_eq!(lic.expiry_date(), "2024-02-29");
+    }
+
+    #[test]
+    fn expiry_date_future() {
+        // Generate a key expiring 365 days from now and check it's a valid date
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let lic = parse(&generate([0; 4], (now_days as u32) + 365, 0)).unwrap();
+        let date = lic.expiry_date();
+        // Should be YYYY-MM-DD format
+        assert_eq!(date.len(), 10);
+        assert_eq!(&date[4..5], "-");
+        assert_eq!(&date[7..8], "-");
+    }
+
+    // =========================================================================
+    // days_remaining() tests
+    // =========================================================================
+
+    #[test]
+    fn days_remaining_never_expires() {
+        let lic = parse(&generate([0; 4], 0, 0)).unwrap();
+        assert_eq!(lic.days_remaining(), None);
+    }
+
+    #[test]
+    fn days_remaining_expired() {
+        let lic = parse(&generate([0; 4], 1, 0)).unwrap(); // day 1 = 1970
+        let remaining = lic.days_remaining().unwrap();
+        assert!(remaining < 0);
+    }
+
+    #[test]
+    fn days_remaining_future() {
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let lic = parse(&generate([0; 4], (now_days as u32) + 30, 0)).unwrap();
+        let remaining = lic.days_remaining().unwrap();
+        assert!(remaining >= 29 && remaining <= 30);
+    }
+
+    #[test]
+    fn days_remaining_today() {
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let lic = parse(&generate([0; 4], now_days as u32, 0)).unwrap();
+        let remaining = lic.days_remaining().unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    // =========================================================================
+    // is_expired() boundary tests
+    // =========================================================================
+
+    #[test]
+    fn is_expired_today_is_not_expired() {
+        // A key expiring "today" (same day) should not yet be expired
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let lic = parse(&generate([0; 4], now_days as u32, 0)).unwrap();
+        assert!(!lic.is_expired());
+    }
+
+    #[test]
+    fn is_expired_yesterday() {
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let lic = parse(&generate([0; 4], (now_days as u32) - 1, 0)).unwrap();
+        assert!(lic.is_expired());
+    }
+
+    // =========================================================================
+    // Full round-trip: generate → parse → validate
+    // =========================================================================
+
+    #[test]
+    fn email_key_full_roundtrip() {
+        let email = "test@example.com";
+        let now_days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            / 86400;
+        let expiry = (now_days as u32) + 180;
+        let key = generate_for_email(email, expiry, 1);
+        let lic = parse(&key).unwrap();
+        assert!(lic.is_pro());
+        assert!(!lic.is_expired());
+        assert!(lic.days_remaining().unwrap() >= 179);
+        assert_ne!(lic.expiry_date(), "never");
+        // Validate with email should work
+        let validated = activate_with_email(&key, email);
+        // activate_with_email writes to disk, but validate_with_email doesn't
+        // Just check parse + verify manually
+        assert_eq!(lic.machine_tag, email_fingerprint(email));
+    }
+
+    #[test]
+    fn generate_for_email_whitespace_trimmed() {
+        let fp1 = email_fingerprint("  user@example.com  ");
+        let fp2 = email_fingerprint("user@example.com");
+        assert_eq!(fp1, fp2);
+    }
+
     #[test]
     fn stored_email_normalizes_case() {
         let raw = "PRECC-DEADBEEF-00000000-00000001-AABBCCDD\nUser@Example.COM\n";

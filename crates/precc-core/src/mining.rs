@@ -1056,6 +1056,55 @@ mod tests {
     }
 
     #[test]
+    fn truncate_exact_length() {
+        let s = "hello";
+        let t = truncate(s, 5);
+        assert_eq!(t, "hello");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        let t = truncate("", 10);
+        assert_eq!(t, "");
+    }
+
+    #[test]
+    fn truncate_max_len_zero() {
+        let t = truncate("hello", 0);
+        assert_eq!(t, "...");
+    }
+
+    #[test]
+    fn truncate_max_len_one() {
+        let t = truncate("hello", 1);
+        assert_eq!(t, "h...");
+    }
+
+    #[test]
+    fn truncate_multibyte_utf8_boundary() {
+        // "━" is 3 bytes (U+2501). Truncating mid-character should not panic.
+        let s = "━━━━━";
+        let t = truncate(s, 2);
+        assert!(t.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_emoji_boundary() {
+        // "😀" is 4 bytes. Truncating at byte 3 should round down.
+        let s = "😀😀😀";
+        let t = truncate(s, 5);
+        assert!(t.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_mixed_ascii_and_multibyte() {
+        let s = "hello━world";
+        let t = truncate(s, 6);
+        assert!(t.ends_with("..."));
+        assert!(t.starts_with("hello"));
+    }
+
+    #[test]
     fn extract_exit_code_with_colon() {
         assert_eq!(extract_exit_code("Exit code: 1"), Some(1));
         assert_eq!(extract_exit_code("Exit code: 127"), Some(127));
