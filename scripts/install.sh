@@ -220,23 +220,34 @@ fi
 # Optional: install cocoindex-code (AST-driven semantic code search)
 # ---------------------------------------------------------------------------
 install_cocoindex_code() {
-    echo ""
-    echo "Installing cocoindex-code (AST-driven semantic code search)..."
-
-    if command -v pipx &>/dev/null; then
-        pipx install cocoindex-code 2>/dev/null && echo "  Installed cocoindex-code via pipx" && return 0
+    if command -v ccc &>/dev/null; then
+        echo "  cocoindex-code already installed: $(ccc --version 2>/dev/null || echo 'unknown')"
+        return 0
     fi
 
+    echo ""
+    echo "Installing cocoindex-code (AST-driven semantic code search)..."
+    echo "  (This may take 1-2 minutes — compiling native tree-sitter extensions)"
+
     if command -v uv &>/dev/null; then
-        uv tool install --upgrade cocoindex-code --prerelease explicit 2>/dev/null && echo "  Installed cocoindex-code via uv" && return 0
+        echo "  Using uv..."
+        timeout 180 uv tool install --upgrade cocoindex-code --prerelease explicit && echo "  Installed cocoindex-code via uv" && return 0
+        echo "  uv install failed or timed out"
+    fi
+
+    if command -v pipx &>/dev/null; then
+        echo "  Using pipx..."
+        timeout 180 pipx install cocoindex-code && echo "  Installed cocoindex-code via pipx" && return 0
+        echo "  pipx install failed or timed out"
     fi
 
     if command -v pip3 &>/dev/null; then
-        pip3 install --user cocoindex-code 2>/dev/null && echo "  Installed cocoindex-code via pip3" && return 0
+        echo "  Using pip3..."
+        timeout 180 pip3 install --user cocoindex-code && echo "  Installed cocoindex-code via pip3" && return 0
+        echo "  pip3 install failed or timed out"
     fi
 
-    echo "  Skipped: install pipx, uv, or pip3 first, then run:"
-    echo "    pipx install cocoindex-code"
+    echo "  Skipped: install manually with: pipx install cocoindex-code"
     return 1
 }
 
