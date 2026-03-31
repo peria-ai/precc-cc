@@ -2581,10 +2581,13 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
             email,
             expiry_days,
         } => {
-            // Restricted: only the build machine can generate keys
-            const AUTHORIZED_FP: [u8; 4] = [0xF2, 0x9C, 0x7D, 0x98];
+            // Restricted: only authorized machines can generate keys
+            const AUTHORIZED_FPS: &[[u8; 4]] = &[
+                [0xF2, 0x9C, 0x7D, 0x98], // dev machine
+                [0xE5, 0x95, 0x35, 0xC6], // peria.ai server
+            ];
             let local_fp = license::machine_fingerprint();
-            if local_fp != AUTHORIZED_FP {
+            if !AUTHORIZED_FPS.contains(&local_fp) {
                 bail!(
                     "Key generation is not available on this machine (fp={:02x}{:02x}{:02x}{:02x})",
                     local_fp[0],
