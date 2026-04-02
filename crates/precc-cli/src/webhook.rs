@@ -25,15 +25,14 @@ use anyhow::{bail, Result};
 use hmac::{Hmac, Mac};
 use precc_core::license;
 use sha2::Sha256;
+
+use crate::mail;
 use std::io::Read as _;
 
 type HmacSha256 = Hmac<Sha256>;
 
 /// Default port for the webhook server.
 const DEFAULT_PORT: u16 = 8090;
-
-/// From address for license key emails.
-const FROM_EMAIL: &str = "support@peria.ai";
 
 /// Run the webhook HTTP server.
 pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
@@ -332,38 +331,10 @@ fn send_expiry_reminder_email(to: &str, duration_days: u32) -> Result<()> {
          https://github.com/peria-ai/precc-cc\n"
     );
 
-    let message = format!(
-        "From: PRECC <{FROM_EMAIL}>\n\
-         To: {to}\n\
-         Subject: Your PRECC Pro license expires tomorrow\n\
-         Content-Type: text/plain; charset=utf-8\n\
-         \n\
-         {body}"
-    );
-
-    let mut child = std::process::Command::new("sendmail")
-        .args(["-t", "-f", FROM_EMAIL])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run sendmail: {e}"))?;
-
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("No stdin on sendmail"))?
-        .write_all(message.as_bytes())
-        .map_err(|e| anyhow::anyhow!("Failed to write to sendmail: {e}"))?;
-
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("sendmail exited with status {}", status);
-    }
-
-    Ok(())
+    mail::send_mail(to, "Your PRECC Pro license expires tomorrow", &body, &[])
 }
 
-/// Send the license key to the customer via local sendmail.
+/// Send the license key to the customer via SMTP (configured in mail.toml).
 fn send_license_email(to: &str, key: &str, expiry_days: u32) -> Result<()> {
     let duration = if expiry_days >= 365 {
         "12 months".to_string()
@@ -391,36 +362,7 @@ fn send_license_email(to: &str, key: &str, expiry_days: u32) -> Result<()> {
          https://github.com/peria-ai/precc-cc\n"
     );
 
-    let message = format!(
-        "From: PRECC <{FROM_EMAIL}>\n\
-         To: {to}\n\
-         Subject: Your PRECC Pro License Key\n\
-         Content-Type: text/plain; charset=utf-8\n\
-         \n\
-         {body}"
-    );
-
-    // Use local sendmail (Postfix)
-    let mut child = std::process::Command::new("sendmail")
-        .args(["-t", "-f", FROM_EMAIL])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run sendmail: {e}"))?;
-
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("No stdin on sendmail"))?
-        .write_all(message.as_bytes())
-        .map_err(|e| anyhow::anyhow!("Failed to write to sendmail: {e}"))?;
-
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("sendmail exited with status {}", status);
-    }
-
-    Ok(())
+    mail::send_mail(to, "Your PRECC Pro License Key", &body, &[])
 }
 
 #[cfg(test)]

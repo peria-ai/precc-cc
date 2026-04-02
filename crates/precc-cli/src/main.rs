@@ -2584,7 +2584,8 @@ fn cmd_license(action: LicenseAction) -> Result<()> {
             // Restricted: only authorized machines can generate keys
             const AUTHORIZED_FPS: &[[u8; 4]] = &[
                 [0xF2, 0x9C, 0x7D, 0x98], // dev machine
-                [0xE5, 0x95, 0x35, 0xC6], // peria.ai server
+                [0xE5, 0x95, 0x35, 0xC6], // peria.ai server (old)
+                [0x86, 0x29, 0x4B, 0x99], // peria.ai server
             ];
             let local_fp = license::machine_fingerprint();
             if !AUTHORIZED_FPS.contains(&local_fp) {

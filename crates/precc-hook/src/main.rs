@@ -21,7 +21,7 @@
 //! - Schema init skipped (precc init handles it)
 
 use precc_core::{
-    agent_propagate, ccc, context, db, geofence, grep_filter, lean_ctx, license, nushell,
+    agent_propagate, ccc, context, db, diet, geofence, grep_filter, lean_ctx, license, nushell,
     post_observe, read_filter, rtk, skills, update_check,
 };
 use serde_json::Value;
@@ -182,6 +182,10 @@ fn parse_session_metrics(since_ts: u64) -> StatuslineCounts {
                 counts.corrections += 1;
                 counts.ccc_bytes_saved += value as u64;
                 counts.tokens_saved += (value * TOKENS_PER_CCC_BYTE) as u64;
+            }
+            "diet_rewrite" => {
+                counts.corrections += 1;
+                counts.tokens_saved += value as u64;
             }
             "gdb_suggestion" => {
                 counts.corrections += 1;
@@ -654,6 +658,10 @@ struct Pipeline {
     had_nushell_wrap: bool,
     had_lean_ctx_wrap: bool,
     had_rtk_rewrite: bool,
+    had_diet_rewrite: bool,
+    diet_tokens_saved: u32,
+    had_skill_activation: bool,
+    skill_activation_count: u32,
     had_gdb_suggestion: bool,
     had_ccc_redirect: bool,
     ccc_saved_bytes: usize,
@@ -672,6 +680,10 @@ impl Pipeline {
             had_nushell_wrap: false,
             had_lean_ctx_wrap: false,
             had_rtk_rewrite: false,
+            had_diet_rewrite: false,
+            diet_tokens_saved: 0,
+            had_skill_activation: false,
+            skill_activation_count: 0,
             had_gdb_suggestion: false,
             had_ccc_redirect: false,
             ccc_saved_bytes: 0,
@@ -708,10 +720,15 @@ impl Pipeline {
         // Stage 4: GDB check (Pillar 2)
         self.stage_gdb();
 
-        // Stage 5: Output compression — mutually exclusive, priority order:
-        //   5a: Nushell (PRECC_NUSHELL=1)
-        //   5b: lean-ctx (PRECC_LEAN_CTX=1) — external output compression
-        //   5c: RTK (fallback)
+        // Stage 5: Diet — rule-based output slimming (AgentDiet-inspired).
+        //   Appends pipe filters or adds flags to reduce verbose output.
+        //   Skipped when lean-ctx/nushell handle compression externally.
+        self.stage_diet();
+
+        // Stage 6: Output compression — mutually exclusive, priority order:
+        //   6a: Nushell (PRECC_NUSHELL=1)
+        //   6b: lean-ctx (PRECC_LEAN_CTX=1) — external output compression
+        //   6c: RTK (fallback)
         if nushell::nushell_mode_enabled() {
             self.stage_nushell();
         }
@@ -722,7 +739,7 @@ impl Pipeline {
             self.stage_rtk();
         }
 
-        // Stage 6: CCC semantic search redirect (Pillar 2b)
+        // Stage 7: CCC semantic search redirect (Pillar 2b)
         self.stage_ccc();
     }
 
@@ -912,6 +929,8 @@ impl Pipeline {
                         skills::apply_template(&m.template, &self.command, &project_root);
                     self.command = rewritten;
                     self.had_cd_prepend = true;
+                    self.had_skill_activation = true;
+                    self.skill_activation_count += 1;
                     used_mutating_types.insert("prepend_cd".to_string());
                     self.reasons
                         .push(format!("skill:{} (conf={:.1})", m.skill_name, m.confidence));
@@ -925,6 +944,8 @@ impl Pipeline {
                     let rewritten =
                         skills::apply_template(&m.template, &self.command, &project_root);
                     self.command = rewritten;
+                    self.had_skill_activation = true;
+                    self.skill_activation_count += 1;
                     used_mutating_types.insert("rewrite_command".to_string());
                     self.reasons
                         .push(format!("skill:{} (conf={:.1})", m.skill_name, m.confidence));
@@ -932,6 +953,8 @@ impl Pipeline {
                 }
                 "suggest_fix" => {
                     // Always additive — surface every suggestion above threshold
+                    self.had_skill_activation = true;
+                    self.skill_activation_count += 1;
                     self.reasons.push(format!(
                         "suggest:{} (conf={:.1})",
                         m.skill_name, m.confidence
@@ -995,7 +1018,35 @@ impl Pipeline {
         }
     }
 
-    /// Stage 5a: Nushell wrapping (experimental).
+    /// Stage 5: Diet — rule-based output slimming (AgentDiet-inspired).
+    ///
+    /// Appends pipe filters (e.g. `| grep -v PASSED`) or adds flags
+    /// (e.g. `--quiet`, `-s`) to commands that produce verbose output.
+    /// Zero-cost alternative to LLM-based trajectory compression.
+    ///
+    /// Skipped when lean-ctx or nushell handle compression externally,
+    /// since those tools already compress all output.
+    fn stage_diet(&mut self) {
+        // Skip if external compression is handling output
+        if lean_ctx::lean_ctx_mode_enabled() || nushell::nushell_mode_enabled() {
+            return;
+        }
+
+        let (prefix, cmd_part) = split_cd_prefix(&self.command);
+
+        if let Some((rewritten, tokens_saved)) = diet::apply(cmd_part) {
+            self.command = if prefix.is_empty() {
+                rewritten
+            } else {
+                format!("{}{}", prefix, rewritten)
+            };
+            self.had_diet_rewrite = true;
+            self.diet_tokens_saved = tokens_saved;
+            self.reasons.push("diet".to_string());
+        }
+    }
+
+    /// Stage 6a: Nushell wrapping (experimental).
     ///
     /// Wraps commands in nushell equivalents that produce compact/structured output.
     /// Only fires when `PRECC_NUSHELL=1` is set and nu is available.
@@ -1204,6 +1255,18 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"rtk_rewrite\",\"value\":1.0}}\n",
             ts
+        ));
+    }
+    if pipeline.had_diet_rewrite {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"diet_rewrite\",\"value\":{}.0}}\n",
+            ts, pipeline.diet_tokens_saved
+        ));
+    }
+    if pipeline.had_skill_activation {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"skill_activation\",\"value\":{}.0}}\n",
+            ts, pipeline.skill_activation_count
         ));
     }
     if pipeline.had_gdb_suggestion {

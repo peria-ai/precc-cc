@@ -7,6 +7,7 @@ pub mod compress;
 pub mod consent;
 pub mod context;
 pub mod db;
+pub mod diet;
 pub mod gdb;
 pub mod geofence;
 pub mod gha;

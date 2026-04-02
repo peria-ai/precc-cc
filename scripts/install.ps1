@@ -217,6 +217,50 @@ function Install-GhBinary($repo, $binaryName, $url) {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: install RTK (pre-built binary — token-optimized CLI output)
+# ---------------------------------------------------------------------------
+Write-Host ""
+$hasRtk = Get-Command "rtk" -ErrorAction SilentlyContinue
+$rtkInstalled = $false
+
+if ($hasRtk) {
+    Write-Host "  RTK already installed: $(rtk --version 2>$null | Select-Object -First 1)"
+    $rtkInstalled = $true
+} else {
+    Write-Host "Installing RTK (token-optimized CLI output — saves 60-90% per command)..."
+    $rtkTag = Get-LatestTag "rtk-ai/rtk"
+    if ($rtkTag) {
+        $rtkUrl = "https://github.com/rtk-ai/rtk/releases/download/$rtkTag/rtk-x86_64-pc-windows-msvc.zip"
+        $rtkInstalled = Install-GhBinary "rtk-ai/rtk" "rtk" $rtkUrl
+    }
+
+    if (-not $rtkInstalled -and (Get-Command "cargo" -ErrorAction SilentlyContinue)) {
+        Write-Host "  Building RTK from source..."
+        try {
+            $null = cargo install rtk *>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  Installed RTK via cargo"
+                $rtkInstalled = $true
+            }
+        } catch { }
+    }
+
+    if (-not $rtkInstalled) {
+        Write-Host "  Skipped: install RTK manually — see https://github.com/rtk-ai/rtk"
+    }
+}
+
+# Cache RTK path for fast lookup by precc-hook
+if ($rtkInstalled) {
+    $rtkPath = (Get-Command "rtk" -ErrorAction SilentlyContinue).Path
+    if ($rtkPath) {
+        $preccData = Join-Path $env:LOCALAPPDATA "precc-cc"
+        New-Item -ItemType Directory -Path $preccData -Force | Out-Null
+        Set-Content -Path (Join-Path $preccData ".rtk_path") -Value $rtkPath
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Optional: install lean-ctx (pre-built binary, ~2 seconds)
 # ---------------------------------------------------------------------------
 Write-Host ""
@@ -372,11 +416,17 @@ if ($cccInstalled) {
 Write-Host ""
 Write-Host "PRECC $Version installed to $InstallDir."
 Write-Host "Run 'precc init' to initialize databases."
+if ($rtkInstalled) {
+    Write-Host "RTK is available — token-optimized output active by default."
+} else {
+    Write-Host "WARNING: RTK not installed — output compression limited to diet rules only."
+    Write-Host "  Install manually: cargo install rtk  (or visit https://github.com/rtk-ai/rtk)"
+}
 if ($leanCtxInstalled) {
-    Write-Host "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
+    Write-Host "lean-ctx is available — deep output compression active by default."
 }
 if ($nuInstalled) {
-    Write-Host "Nushell is available. Set PRECC_NUSHELL=1 to enable compact output rewriting."
+    Write-Host "Nushell is available — compact output rewriting active by default."
 }
 if ($cccInstalled) {
     Write-Host "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."

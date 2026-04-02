@@ -7,7 +7,7 @@
 //!
 //! # Activation
 //!
-//! Set `PRECC_NUSHELL=1` to enable nushell mode (replaces RTK stage in the pipeline).
+//! Enabled by default when `nu` is available. Set `PRECC_NUSHELL=0` to disable.
 //! When no nushell translation matches, the pipeline falls through to RTK as usual.
 //!
 //! # Design
@@ -69,15 +69,18 @@ pub fn nu_available() -> bool {
     *AVAILABLE
 }
 
-/// Check if nushell mode is enabled via `PRECC_NUSHELL` env var.
-/// Cached via `OnceLock` — zero cost after first check.
+/// Check if nushell mode is enabled.
+///
+/// Enabled by default when `nu` is available. Set `PRECC_NUSHELL=0`
+/// to disable. Cached via `OnceLock` — zero cost after first check.
 pub fn nushell_mode_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("PRECC_NUSHELL")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "benchmark")
-            .unwrap_or(false)
-            && nu_available()
+        // Enabled by default when available; disable with PRECC_NUSHELL=0
+        let env_enabled = std::env::var("PRECC_NUSHELL")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true); // default: enabled
+        env_enabled && nu_available()
     })
 }
 

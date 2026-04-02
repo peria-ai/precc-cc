@@ -303,6 +303,58 @@ wire_mcp_lean_ctx() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Optional: install RTK (pre-built binary — token-optimized CLI output)
+# ---------------------------------------------------------------------------
+install_rtk() {
+    if command -v rtk &>/dev/null; then
+        echo "  RTK already installed: $(rtk --version 2>/dev/null | head -1)"
+        return 0
+    fi
+
+    echo ""
+    echo "Installing RTK (token-optimized CLI output — saves 60-90% per command)..."
+
+    local tag
+    tag="$(gh_latest_tag rtk-ai/rtk)" || true
+    if [[ -z "${tag}" ]]; then
+        echo "  Failed to fetch RTK release tag"
+        return 1
+    fi
+
+    # RTK uses slightly different target naming
+    local rtk_target
+    case "${TARGET}" in
+        x86_64-unknown-linux-gnu)  rtk_target="x86_64-unknown-linux-musl" ;;
+        aarch64-unknown-linux-gnu) rtk_target="aarch64-unknown-linux-gnu" ;;
+        x86_64-apple-darwin)       rtk_target="x86_64-apple-darwin" ;;
+        aarch64-apple-darwin)      rtk_target="aarch64-apple-darwin" ;;
+        *)
+            echo "  No pre-built RTK binary for ${TARGET}"
+            return 1
+            ;;
+    esac
+
+    local url="https://github.com/rtk-ai/rtk/releases/download/${tag}/rtk-${rtk_target}.tar.gz"
+    if gh_install_binary "rtk-ai/rtk" "rtk" "${url}"; then
+        # Cache the path for fast lookup by precc-hook
+        mkdir -p "${HOME}/.local/share/precc"
+        echo "${BIN_DIR}/rtk" > "${HOME}/.local/share/precc/.rtk_path"
+        return 0
+    fi
+
+    # Fallback: cargo
+    if command -v cargo &>/dev/null; then
+        echo "  Building RTK from source..."
+        cargo install rtk 2>/dev/null && echo "  Installed RTK via cargo" && return 0
+    fi
+
+    echo "  Skipped: install RTK manually — see https://github.com/rtk-ai/rtk"
+    return 1
+}
+
+install_rtk
+
 install_lean_ctx
 wire_mcp_lean_ctx
 
@@ -407,11 +459,17 @@ echo ""
 echo "PRECC ${VERSION} installed to ${BIN_DIR}."
 echo "Run 'precc init' to initialize databases."
 echo ""
+if command -v rtk &>/dev/null; then
+    echo "✓ RTK is available — token-optimized output active by default."
+else
+    echo "⚠ RTK not installed — output compression limited to diet rules only."
+    echo "  Install manually: cargo install rtk  (or visit https://github.com/rtk-ai/rtk)"
+fi
 if command -v lean-ctx &>/dev/null; then
-    echo "lean-ctx is available. Set PRECC_LEAN_CTX=1 to enable deep output compression."
+    echo "✓ lean-ctx is available — deep output compression active by default."
 fi
 if command -v nu &>/dev/null; then
-    echo "Nushell is available. Set PRECC_NUSHELL=1 to enable compact output rewriting."
+    echo "✓ Nushell is available — compact output rewriting active by default."
 fi
 if command -v ccc &>/dev/null; then
     echo "cocoindex-code is available. Run 'ccc init && ccc index' in your project to enable AST-based semantic search."

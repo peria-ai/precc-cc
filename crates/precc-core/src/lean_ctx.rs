@@ -6,7 +6,7 @@
 //!
 //! # Activation
 //!
-//! Set `PRECC_LEAN_CTX=1` to enable lean-ctx wrapping (replaces RTK stage in the pipeline).
+//! Enabled by default when lean-ctx is available. Set `PRECC_LEAN_CTX=0` to disable.
 //! When lean-ctx is not available or the env var is unset, the pipeline falls through to RTK.
 //!
 //! # Interface boundary
@@ -68,9 +68,11 @@ pub fn lean_ctx_available() -> bool {
     *AVAILABLE
 }
 
-/// Check if lean-ctx mode is enabled via `PRECC_LEAN_CTX` env var.
-/// Also returns false if `LEAN_CTX_ACTIVE` is already set (lean-ctx's own
-/// double-wrap guard), preventing infinite recursion.
+/// Check if lean-ctx mode is enabled.
+///
+/// Enabled by default when lean-ctx is available. Set `PRECC_LEAN_CTX=0`
+/// to disable. Also returns false if `LEAN_CTX_ACTIVE` is already set
+/// (lean-ctx's own double-wrap guard), preventing infinite recursion.
 /// Cached via `OnceLock` — zero cost after first check.
 pub fn lean_ctx_mode_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -79,10 +81,11 @@ pub fn lean_ctx_mode_enabled() -> bool {
         if std::env::var("LEAN_CTX_ACTIVE").is_ok() {
             return false;
         }
-        std::env::var("PRECC_LEAN_CTX")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "benchmark")
-            .unwrap_or(false)
-            && lean_ctx_available()
+        // Enabled by default when available; disable with PRECC_LEAN_CTX=0
+        let env_enabled = std::env::var("PRECC_LEAN_CTX")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true); // default: enabled
+        env_enabled && lean_ctx_available()
     })
 }
 
