@@ -158,6 +158,52 @@ pub fn auto_update_enabled() -> bool {
     false
 }
 
+/// Returns `true` if the user has already been asked about auto-updates
+/// (regardless of their answer).  Used to gate the consent prompt.
+pub fn has_auto_update_consent() -> bool {
+    if let Ok(home) = std::env::var("HOME") {
+        let config_path = std::path::Path::new(&home).join(".config/precc/config.toml");
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(parsed) = content.parse::<toml::Table>() {
+                if let Some(update) = parsed.get("update").and_then(|v| v.as_table()) {
+                    return update.contains_key("auto");
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Interactively ask the user about auto-updates (enabled by default).
+///
+/// Reads a single line from stdin.  Returns the user's choice and persists
+/// it to `config.toml` so the question is only asked once.
+pub fn prompt_auto_update_consent() -> Result<bool> {
+    use std::io::{BufRead, Write};
+
+    println!("Auto-update: PRECC will check once daily and upgrade silently.");
+    print!("Disable automatic updates? [y/N] ");
+    std::io::stdout().flush()?;
+
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    let disable = matches!(answer.trim().to_lowercase().as_str(), "y" | "yes");
+    let enabled = !disable;
+
+    set_auto_update(enabled)?;
+
+    if enabled {
+        println!(
+            "  Auto-update enabled — PRECC will upgrade silently when new versions are released."
+        );
+    } else {
+        println!("  Auto-update disabled — run `precc update` manually to upgrade.");
+    }
+    println!("  Change later: edit ~/.config/precc/config.toml → [update] auto = true/false");
+
+    Ok(enabled)
+}
+
 /// Persist auto-update setting to `~/.config/precc/config.toml`.
 pub fn set_auto_update(enabled: bool) -> Result<()> {
     let home = std::env::var("HOME").context("HOME not set")?;

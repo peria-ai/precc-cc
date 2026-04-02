@@ -530,6 +530,12 @@ fn cmd_init() -> Result<()> {
         eprintln!("  Warning: could not write ~/.claude/CLAUDE.md: {e:#}");
     }
 
+    // Ask about auto-updates if not already configured
+    if !update_check::has_auto_update_consent() {
+        println!();
+        let _ = update_check::prompt_auto_update_consent();
+    }
+
     println!();
     println!("Prompt caching (Anthropic API users only):");
     println!("  Run `precc cache-hint` to print a ready-to-paste systemPrompt block");
@@ -3440,6 +3446,12 @@ fn cmd_update(force: bool, requested_version: Option<String>, auto: bool) -> Res
     // Clear the update-available marker so the banner stops showing
     if let Ok(data_dir) = db::data_dir() {
         update_check::clear_update_marker(&data_dir);
+    }
+
+    // Ask about auto-updates if not already configured
+    if !update_check::has_auto_update_consent() {
+        println!();
+        let _ = update_check::prompt_auto_update_consent();
     }
 
     Ok(())

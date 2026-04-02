@@ -341,10 +341,20 @@ fn run_bash_pipeline(
     let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
     append_metrics_log_bash(&pipeline, latency_ms);
 
-    // Surface update notification on stderr (never delays stdout response)
+    // Surface update notification on stderr (never delays stdout response).
+    // If auto-update is enabled and an update is available, perform it silently.
     if let Ok(data_dir) = db::data_dir() {
         if let Some(ver) = update_check::read_update_available(&data_dir) {
-            eprintln!("[precc] Update available: v{ver} — run `precc update`");
+            if update_check::auto_update_enabled() {
+                // Fire auto-update in background (don't block the hook response)
+                let dd = data_dir.clone();
+                let v = ver.clone();
+                std::thread::spawn(move || {
+                    let _ = update_check::perform_auto_update(&dd, &v);
+                });
+            } else {
+                eprintln!("[precc] Update available: v{ver} — run `precc update`");
+            }
         }
     }
 
