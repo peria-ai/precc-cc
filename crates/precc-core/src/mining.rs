@@ -654,7 +654,10 @@ fn truncate(s: &str, max_len: usize) -> String {
         s.to_string()
     } else {
         // Find the nearest char boundary at or before max_len
-        let end = s.floor_char_boundary(max_len);
+        let mut end = max_len;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
         format!("{}...", &s[..end])
     }
 }

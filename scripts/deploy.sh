@@ -146,18 +146,23 @@ build_macos() {
     else
         DARWIN_TRIPLE="x86_64-apple-darwin22.4"
     fi
+    local UPPER_TRIPLE
+    UPPER_TRIPLE="$(echo "${TRIPLE}" | tr '[:lower:]' '[:upper:]')"
     echo "==> Step 2b: Building ${TARGET} via Docker (osxcross)..."
     sg docker -c "docker run --rm \
         -v '$(pwd):/workspace' \
         -w /workspace \
         -e PATH=${CARGO_BIN}:${OSXCROSS_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        -e PRECC_LICENSE_SECRET="${PRECC_LICENSE_SECRET:-}" \
-        -e CC_${TRIPLE//-/_}=${DARWIN_TRIPLE}-clang \
-        -e CXX_${TRIPLE//-/_}=${DARWIN_TRIPLE}-clang++ \
-        -e AR_${TRIPLE//-/_}=${DARWIN_TRIPLE}-ar \
-        -e RANLIB_${TRIPLE//-/_}=${DARWIN_TRIPLE}-ranlib \
-        -e CARGO_TARGET_$(echo "${TRIPLE}" | tr '[:lower:]' '[:upper:]')_LINKER=${DARWIN_TRIPLE}-clang \
-        -e OPENSSL_BUILD_RANLIB=${DARWIN_TRIPLE}-ranlib \
+        -e PRECC_LICENSE_SECRET=${PRECC_LICENSE_SECRET:-} \
+        -e CC=${DARWIN_TRIPLE}-clang \
+        -e CXX=${DARWIN_TRIPLE}-clang++ \
+        -e AR=${DARWIN_TRIPLE}-ar \
+        -e RANLIB=${DARWIN_TRIPLE}-ranlib \
+        -e CC_${TRIPLE}=${DARWIN_TRIPLE}-clang \
+        -e CXX_${TRIPLE}=${DARWIN_TRIPLE}-clang++ \
+        -e AR_${TRIPLE}=${DARWIN_TRIPLE}-ar \
+        -e RANLIB_${TRIPLE}=${DARWIN_TRIPLE}-ranlib \
+        -e CARGO_TARGET_${UPPER_TRIPLE}_LINKER=${DARWIN_TRIPLE}-clang \
         ${DOCKER_IMAGE} \
         sh -c 'cargo build --release -p precc-hook -p precc-cli -p precc-miner --target ${TARGET} 2>&1 | tail -5'"
     MACOS_TARGETS+=("$TARGET")
