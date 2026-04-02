@@ -109,6 +109,28 @@ fn shell_quote(s: &str) -> String {
     out
 }
 
+/// Commands that should never be wrapped by output compression tools.
+/// These are PRECC's own binaries and companion tools.
+const SKIP_PREFIXES: &[&str] = &[
+    "precc",
+    "precc-hook",
+    "precc-miner",
+    "lean-ctx",
+    "rtk",
+    "nu ",
+    "ccc ",
+    "claude ",
+    "cursor ",
+];
+
+/// Returns true if the command starts with a tool that should not be wrapped.
+pub fn is_tool_command(cmd: &str) -> bool {
+    let trimmed = cmd.trim_start();
+    SKIP_PREFIXES
+        .iter()
+        .any(|p| trimmed.starts_with(p) || trimmed.starts_with(&format!("./{p}")))
+}
+
 /// Wrap a command in `lean-ctx -c '...'` for output compression.
 ///
 /// Returns `Some(wrapped)` if wrapping is appropriate, `None` otherwise.
@@ -116,6 +138,11 @@ fn shell_quote(s: &str) -> String {
 pub fn wrap(command: &str) -> Option<String> {
     // Already wrapped — prevent double-wrapping
     if command.contains("lean-ctx") {
+        return None;
+    }
+
+    // Never wrap PRECC's own commands or companion tools
+    if is_tool_command(command) {
         return None;
     }
 
@@ -228,5 +255,33 @@ mod tests {
     fn lean_ctx_available_does_not_panic() {
         // Verify the PATH scanning and caching logic doesn't crash
         let _ = lean_ctx_available();
+    }
+
+    #[test]
+    fn wrap_skips_precc_commands() {
+        assert!(wrap("precc init").is_none());
+        assert!(wrap("precc update --force").is_none());
+        assert!(wrap("precc-hook").is_none());
+        assert!(wrap("precc-miner --interval 60").is_none());
+    }
+
+    #[test]
+    fn wrap_skips_companion_tools() {
+        assert!(wrap("rtk git status").is_none());
+        assert!(wrap("ccc search foo").is_none());
+        assert!(wrap("claude code").is_none());
+    }
+
+    #[test]
+    fn is_tool_command_with_path() {
+        assert!(is_tool_command("./precc init"));
+        assert!(is_tool_command("  precc update"));
+    }
+
+    #[test]
+    fn is_tool_command_normal_commands() {
+        assert!(!is_tool_command("cargo test"));
+        assert!(!is_tool_command("git status"));
+        assert!(!is_tool_command("ls -la"));
     }
 }

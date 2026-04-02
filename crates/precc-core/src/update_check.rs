@@ -489,13 +489,20 @@ mod tests {
     }
 
     #[test]
-    fn auto_update_disabled_by_default() {
-        // With no env var and no config file, should be false
+    fn auto_update_disabled_without_config() {
+        // With no env var and no config file, should be false.
+        // Use a temp HOME to isolate from the real config file.
         let had_env = std::env::var("PRECC_AUTO_UPDATE").ok();
+        let had_home = std::env::var("HOME").ok();
         std::env::remove_var("PRECC_AUTO_UPDATE");
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
         assert!(!auto_update_enabled());
         if let Some(v) = had_env {
             std::env::set_var("PRECC_AUTO_UPDATE", v);
+        }
+        if let Some(h) = had_home {
+            std::env::set_var("HOME", h);
         }
     }
 

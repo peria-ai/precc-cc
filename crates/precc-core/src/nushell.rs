@@ -283,6 +283,11 @@ pub fn wrap(command: &str) -> Option<String> {
         return None;
     }
 
+    // Never wrap PRECC's own commands or companion tools
+    if crate::lean_ctx::is_tool_command(command) {
+        return None;
+    }
+
     // Skip if not nu-safe
     if !is_nu_safe(command) {
         return None;

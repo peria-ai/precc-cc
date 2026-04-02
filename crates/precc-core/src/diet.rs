@@ -151,6 +151,11 @@ pub fn apply(command: &str) -> Option<(String, u32)> {
         return None;
     }
 
+    // Never modify PRECC's own commands or companion tools
+    if crate::lean_ctx::is_tool_command(cmd) {
+        return None;
+    }
+
     // Skip heredocs — pipe appending would break them
     if cmd.contains("<<") {
         return None;
