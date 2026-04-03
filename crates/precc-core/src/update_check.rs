@@ -21,7 +21,7 @@ const LAST_CHECKED_FILE: &str = ".update_last_checked";
 const UPDATE_AVAILABLE_FILE: &str = ".update_available";
 
 /// GitHub repository for release checks.
-const REPO: &str = "yijunyu/precc-cc";
+const REPO: &str = "peria-ai/precc-cc";
 
 // ─── Rate limiting ──────────────────────────────────────────────────────────
 

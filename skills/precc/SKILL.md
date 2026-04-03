@@ -3,7 +3,7 @@ name: precc
 description: Predictive Error Correction for Claude Code — corrects bash commands before execution
 version: 1.0.0
 emoji: "🔧"
-homepage: https://github.com/yijunyu/precc-cc
+homepage: https://github.com/peria-ai/precc-cc
 os:
   - linux
   - macos
@@ -27,15 +27,15 @@ env:
 dependencies:
   - name: precc
     type: binary
-    url: https://github.com/yijunyu/precc-cc/releases
+    url: https://github.com/peria-ai/precc-cc/releases
   - name: cocoindex-code
     type: pip
     required: false
     url: https://pypi.org/project/cocoindex-code/
 author: yijunyu
 links:
-  homepage: https://github.com/yijunyu/precc-cc
-  repository: https://github.com/yijunyu/precc-cc
+  homepage: https://github.com/peria-ai/precc-cc
+  repository: https://github.com/peria-ai/precc-cc
 ---
 
 # PRECC — Predictive Error Correction for Claude Code
@@ -63,7 +63,7 @@ PRECC saves **~34% of Claude Code costs** through three pillars: correcting bash
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 precc init
 ```
 
@@ -134,7 +134,7 @@ precc compress --revert    # revert
 
 ## Links
 
-- GitHub: https://github.com/yijunyu/precc-cc
+- GitHub: https://github.com/peria-ai/precc-cc
 - ClawHub: https://clawhub.ai/skills/precc
 - cocoindex-code: https://github.com/cocoindex-io/cocoindex-code
 - RTK: https://github.com/rtk-ai/rtk

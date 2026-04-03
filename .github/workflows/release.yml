@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  PUBLIC_REPO: yijunyu/precc-cc
+  PUBLIC_REPO: peria-ai/precc-cc
 
 jobs:
   trigger-public-build:

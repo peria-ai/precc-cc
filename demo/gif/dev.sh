@@ -14,7 +14,7 @@ sleep 0.3
 
 # ── 1. Installation ───────────────────────────────────────────────────────────
 t "STEP 1 — Install PRECC (one command)"
-dim "  \$ curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
+dim "  \$ curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash"
 sleep 0.5
 echo "  Downloading precc v0.1.0 for linux-x86_64 ..."
 echo "  Installing to ~/.local/bin/ ..."

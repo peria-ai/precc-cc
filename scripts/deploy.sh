@@ -1,5 +1,5 @@
 #!/bin/bash
-# deploy.sh — Build, tag, release, and push PRECC to yijunyu/precc-cc
+# deploy.sh — Build, tag, release, and push PRECC to peria-ai/precc-cc
 #
 # Usage:
 #   bash scripts/deploy.sh <version>          # e.g. bash scripts/deploy.sh v0.7.0

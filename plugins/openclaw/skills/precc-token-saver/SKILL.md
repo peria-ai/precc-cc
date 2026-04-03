@@ -8,7 +8,7 @@ disable-model-invocation: false
 metadata:
   openclaw:
     emoji: ⚡
-    homepage: https://github.com/yijunyu/precc-cc
+    homepage: https://github.com/peria-ai/precc-cc
     os:
       - darwin
       - linux
@@ -68,7 +68,7 @@ Agent executes:       cd /path/to/project && rtk cargo build
 
 ```bash
 # Install PRECC
-curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 
 # Initialise (one-time)
 precc init
@@ -122,4 +122,4 @@ precc skills show <name>   # detail for one skill
 
 ## License
 
-MIT — https://github.com/yijunyu/precc-cc
+MIT — https://github.com/peria-ai/precc-cc

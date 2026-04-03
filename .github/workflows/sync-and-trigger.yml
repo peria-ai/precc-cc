@@ -1,7 +1,7 @@
 name: Sync public repo and trigger CI
 
 # Runs on every push to master.
-# 1. Syncs whitelisted files to yijunyu/precc-cc (public)
+# 1. Syncs whitelisted files to peria-ai/precc-cc (public)
 # 2. Triggers the build-and-release workflow on the public repo via workflow_dispatch
 #
 # The build itself runs on the PUBLIC repo's free CI runners.
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  PUBLIC_REPO: yijunyu/precc-cc
+  PUBLIC_REPO: peria-ai/precc-cc
 
 jobs:
   sync-and-trigger:

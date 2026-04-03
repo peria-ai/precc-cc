@@ -54,7 +54,7 @@ pub async fn run_precc_hook(command: &str) -> Result<String> {
             format!(
                 "precc-hook not found at '{hook_bin}'. \
                  Install with: curl -fsSL \
-                 https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
+                 https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash"
             )
         })?;
 

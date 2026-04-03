@@ -72,7 +72,7 @@ SLIDES_EN = [
                 ("Learns", "from your own sessions over time"),
             ],
             "INSTALL": [
-                "curl -fsSL https://raw.githubusercontent.com/\nyijunyu/precc-cc/main/scripts/install.sh | bash",
+                "curl -fsSL https://raw.githubusercontent.com/\nperia-ai/precc-cc/main/scripts/install.sh | bash",
             ],
         },
         "tagline": "PRECC — Predictive Error Correction for Claude Code",
@@ -240,7 +240,7 @@ SLIDES_ZH = [
                 ("自动学习", "从您的会话中持续改进"),
             ],
             "安装": [
-                "curl -fsSL https://raw.githubusercontent.com/\nyijunyu/precc-cc/main/scripts/install.sh | bash",
+                "curl -fsSL https://raw.githubusercontent.com/\nperia-ai/precc-cc/main/scripts/install.sh | bash",
             ],
         },
         "tagline": "PRECC — 面向Claude Code的预测性错误修正",

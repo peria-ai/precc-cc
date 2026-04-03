@@ -67,7 +67,7 @@ sleep 0.5
 t "DEPLOYMENT — Three commands, all platforms"
 echo ""
 printf '  \033[1m# Install\033[0m\n'
-dim "  \$ curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
+dim "  \$ curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash"
 printf '  \033[1m# Initialise\033[0m\n'
 dim "  \$ precc init"
 printf '  \033[1m# Activate enterprise license\033[0m\n'

@@ -26,7 +26,7 @@ sleep 0.8
 # ── 2. Install ────────────────────────────────────────────────────────────────
 t "THE PRODUCT — One command to deploy"
 echo ""
-dim "  \$ curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash"
+dim "  \$ curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash"
 sleep 0.4
 echo "  Downloading ..."
 ok "Done. No configuration. Works immediately."

@@ -331,7 +331,7 @@ echo "  └───────────────────────
 echo -e "${RESET}"
 echo ""
 echo -e "${BOLD}Install in one line:${RESET}"
-echo -e "  ${CYAN}curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash${RESET}"
+echo -e "  ${CYAN}curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash${RESET}"
 echo ""
 echo -e "${DIM}Demo complete. Temp files cleaned up automatically.${RESET}"
 echo ""

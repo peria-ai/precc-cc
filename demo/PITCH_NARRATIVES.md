@@ -202,7 +202,7 @@ Reports include: commands corrected, tokens saved, dollar estimate.
 
 ```bash
 # Install (all platforms, one command)
-curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 precc init
 
 # Activate enterprise license
@@ -306,7 +306,7 @@ Frame it as: "Choose your API source. PRECC maximises whatever you're paying for
 ### One Line to Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yijunyu/precc-cc/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 precc init
 ```
 
