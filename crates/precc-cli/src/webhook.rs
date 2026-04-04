@@ -54,11 +54,28 @@ pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to bind {addr}: {e}"))?;
 
     eprintln!("PRECC webhook server listening on {addr}");
-    eprintln!("  Endpoint: POST /webhook/stripe");
+    eprintln!("  Endpoints:");
+    eprintln!("    POST /webhook/stripe     — Stripe license delivery");
+    eprintln!("    POST /api/telemetry/v1   — Anonymous usage telemetry");
 
     for mut request in server.incoming_requests() {
         let url = request.url().to_string();
         let method = request.method().to_string();
+
+        if method == "POST" && url == "/api/telemetry/v1" {
+            match handle_telemetry(&mut request) {
+                Ok(()) => {
+                    let resp = tiny_http::Response::from_string("OK").with_status_code(200);
+                    let _ = request.respond(resp);
+                }
+                Err(e) => {
+                    eprintln!("[TELEMETRY ERR] {e}");
+                    let resp = tiny_http::Response::from_string("Bad request").with_status_code(400);
+                    let _ = request.respond(resp);
+                }
+            }
+            continue;
+        }
 
         if method != "POST" || url != "/webhook/stripe" {
             let resp = tiny_http::Response::from_string("Not found").with_status_code(404);
@@ -79,6 +96,53 @@ pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+/// Handle a telemetry POST — append JSON-lines to ~/.local/share/precc/telemetry.jsonl
+fn handle_telemetry(request: &mut tiny_http::Request) -> Result<()> {
+    use std::io::Write;
+
+    let mut body = String::new();
+    request
+        .as_reader()
+        .read_to_string(&mut body)
+        .map_err(|e| anyhow::anyhow!("Failed to read telemetry body: {e}"))?;
+
+    // Validate it's valid JSON
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("Invalid JSON: {e}"))?;
+
+    // Add server-side timestamp
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut record = value;
+    record["_received_at"] = serde_json::json!(now);
+    record["_remote_ip"] = serde_json::json!(request
+        .remote_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default());
+
+    // Append to telemetry log
+    let data_dir = precc_core::db::data_dir()?;
+    let path = data_dir.join("telemetry.jsonl");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+
+    let line = serde_json::to_string(&record)?;
+    writeln!(file, "{line}")?;
+
+    eprintln!("[TELEMETRY] v={} os={} tier={}",
+        record["precc_version"].as_str().unwrap_or("?"),
+        record["os"].as_str().unwrap_or("?"),
+        record["tier"].as_str().unwrap_or("?"),
+    );
 
     Ok(())
 }

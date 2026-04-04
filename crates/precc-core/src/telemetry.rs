@@ -279,7 +279,7 @@ fn send(payload: &TelemetryPayload) -> Result<()> {
 
     const TELEMETRY_URL: &str = match option_env!("PRECC_TELEMETRY_URL") {
         Some(u) => u,
-        None => "https://precc.goatcounter.com/api/telemetry/v1",
+        None => "https://peria.ai/api/telemetry/v1",
     };
 
     let _ = std::process::Command::new("curl")
