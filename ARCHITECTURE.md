@@ -138,7 +138,7 @@ For each session JSONL file:
 
 **Mining modes**:
 - **On-demand**: `precc ingest [session-file]` — mine a specific session
-- **Background daemon**: `precc-miner` — watch for new session files and mine continuously
+- **Background daemon**: `precc-learner` — watch for new session files and mine continuously
 - **Batch**: `precc ingest --all` — mine all unmined sessions
 
 ### Pillar 4: Heuristics DB (Skills)
@@ -245,7 +245,7 @@ CREATE INDEX idx_skills_enabled ON skills(enabled);
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│  precc-miner (background daemon)                            │
+│  precc-learner (background daemon)                            │
 │    ├─ Watch ~/.claude/projects/ for new JSONL               │
 │    ├─ Mine failure-fix pairs → history.db                   │
 │    ├─ Import activations.log → skill_stats (atomic rename)  │
@@ -413,7 +413,7 @@ CREATE INDEX idx_metrics_time ON metrics(timestamp);
 ~/.claude/projects/*/session.jsonl
          │
          ▼
-    precc-miner (or precc ingest)
+    precc-learner (or precc ingest)
          │
          ├─ Parse JSONL events
          ├─ Identify failures (exit_code != 0)
@@ -477,7 +477,7 @@ precc-cli (binary, user-facing)
     ├── precc-core
     └── clap (CLI parsing)
 
-precc-miner (binary, background daemon)
+precc-learner (binary, background daemon)
     ├── precc-core
     └── notify (filesystem watching)
 ```
@@ -511,7 +511,7 @@ rtk/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── main.rs      # CLI entry point
-│   └── precc-miner/
+│   └── precc-learner/
 │       ├── Cargo.toml
 │       └── src/
 │           └── main.rs      # Miner daemon entry point

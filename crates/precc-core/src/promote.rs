@@ -50,7 +50,7 @@ const MIN_ACTIVATIONS_FOR_DISABLE: i64 = 5;
 
 /// Evaluate all mined skills against their activation stats and update confidence levels.
 ///
-/// Called by precc-miner on every tick (after `import_activation_log`).
+/// Called by precc-learner on every tick (after `import_activation_log`).
 /// Only affects skills with `source = 'mined'` — built-in skills are never auto-demoted.
 ///
 /// Lifecycle transitions:

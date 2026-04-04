@@ -39,7 +39,7 @@ The key-value alternatives would require reimplementing relational logic in appl
 
 ## 3. Workspace of 4 Crates vs Monolith
 
-**Decision**: Structure the project as a Cargo workspace with 4 crates: `precc-core`, `precc-hook`, `precc-cli`, `precc-miner`.
+**Decision**: Structure the project as a Cargo workspace with 4 crates: `precc-core`, `precc-hook`, `precc-cli`, `precc-learner`.
 
 **Alternatives considered**:
 
@@ -52,7 +52,7 @@ The key-value alternatives would require reimplementing relational logic in appl
 **Rationale**: The three binaries have fundamentally different requirements:
 - **precc-hook**: Must be tiny and fast (< 5ms). Cannot afford to link CLI parsing or filesystem watching.
 - **precc-cli**: Needs clap for argument parsing, rich formatting for reports.
-- **precc-miner**: Needs filesystem watching (notify crate), long-running daemon support.
+- **precc-learner**: Needs filesystem watching (notify crate), long-running daemon support.
 
 A monolith would bloat the hook binary with unnecessary dependencies. Separate repos would make cross-crate changes painful. The workspace strikes the right balance: shared code in `precc-core`, independent binaries that only link what they need.
 
@@ -78,7 +78,7 @@ The hook can still *suggest* using `precc debug` (via `permissionDecisionReason`
 
 ## 5. Background Daemon vs On-Demand Mining
 
-**Decision**: Support both modes — `precc-miner` daemon for continuous mining, `precc ingest` for on-demand.
+**Decision**: Support both modes — `precc-learner` daemon for continuous mining, `precc ingest` for on-demand.
 
 **Alternatives considered**:
 

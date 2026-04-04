@@ -110,7 +110,7 @@ if command -v cargo-zigbuild &>/dev/null; then
     cargo zigbuild --release \
         -p precc-hook \
         -p precc-cli \
-        -p precc-miner \
+        -p precc-learner \
         --target x86_64-unknown-linux-gnu.2.17 \
         --target aarch64-unknown-linux-gnu.2.17
     LINUX_TARGETS+=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
@@ -120,11 +120,11 @@ else
     cargo build --release \
         -p precc-hook \
         -p precc-cli \
-        -p precc-miner
+        -p precc-learner
     # Native build puts binaries in target/release/, symlink to target/<triple>/release/
     NATIVE_TARGET="$(rustc -vV | grep host | sed 's/host: //')"
     mkdir -p "target/${NATIVE_TARGET}/release"
-    for bin in precc precc-hook precc-miner; do
+    for bin in precc precc-hook precc-learner; do
         if [[ -f "target/release/${bin}" ]]; then
             cp "target/release/${bin}" "target/${NATIVE_TARGET}/release/${bin}"
         fi
@@ -164,7 +164,7 @@ build_macos() {
         -e RANLIB_${TRIPLE}=${DARWIN_TRIPLE}-ranlib \
         -e CARGO_TARGET_${UPPER_TRIPLE}_LINKER=${DARWIN_TRIPLE}-clang \
         ${DOCKER_IMAGE} \
-        sh -c 'cargo build --release -p precc-hook -p precc-cli -p precc-miner --target ${TARGET} 2>&1 | tail -5'"
+        sh -c 'cargo build --release -p precc-hook -p precc-cli -p precc-learner --target ${TARGET} 2>&1 | tail -5'"
     MACOS_TARGETS+=("$TARGET")
 }
 
@@ -190,7 +190,7 @@ for TARGET in "${ALL_TARGETS[@]}"; do
     mkdir -p "${TMP}/${STAGING}"
     cp "target/${TARGET}/release/precc"       "${TMP}/${STAGING}/"
     cp "target/${TARGET}/release/precc-hook"  "${TMP}/${STAGING}/"
-    cp "target/${TARGET}/release/precc-miner" "${TMP}/${STAGING}/"
+    cp "target/${TARGET}/release/precc-learner" "${TMP}/${STAGING}/"
     tar -czf "${TMP}/${ARCHIVE}" -C "$TMP" "$STAGING"
     ASSETS+=("${TMP}/${ARCHIVE}")
 done

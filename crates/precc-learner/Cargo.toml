@@ -1,9 +1,9 @@
 [package]
-name = "precc-miner"
+name = "precc-learner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Background daemon that mines Claude Code session logs for failure patterns"
+description = "Background daemon that learns error patterns from Claude Code session logs"
 
 [dependencies]
 precc-core = { path = "../precc-core" }

@@ -15,7 +15,7 @@
 //! Performance notes:
 //! - No subprocess spawns (gdb/rtk checks use PATH scanning)
 //! - No DB writes in the hot path — metrics appended to metrics.log (O_APPEND)
-//!   and imported into metrics.db by precc-miner on its next tick.
+//!   and imported into metrics.db by precc-learner on its next tick.
 //! - No builtin skills loading (done by precc init)
 //! - Heuristics DB opened read-only, skipped if file doesn't exist
 //! - Schema init skipped (precc init handles it)
@@ -1209,7 +1209,7 @@ fn append_activation_log(skill_id: i64, skill_name: &str, conf: f64) {
     }
 }
 
-/// Append Bash hook metrics to metrics.log for async import by precc-miner.
+/// Append Bash hook metrics to metrics.log for async import by precc-learner.
 ///
 /// Records: hook_latency, cd_prepend (if fired), rtk_rewrite (if fired).
 /// Uses O_APPEND semantics — single write() syscall per entry, atomic.

@@ -4,7 +4,7 @@ members = [
     "crates/precc-core",
     "crates/precc-hook",
     "crates/precc-cli",
-    "crates/precc-miner",
+    "crates/precc-learner",
 ]
 
 [workspace.package]

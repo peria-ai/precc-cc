@@ -1,14 +1,14 @@
-//! precc-miner: Background daemon for mining Claude Code session logs.
+//! precc-learner: Background daemon for mining Claude Code session logs.
 //!
 //! Watches ~/.claude/projects/ for new JSONL session files,
 //! mines failure-fix pairs into history.db, and promotes
 //! recurring patterns into skills in heuristics.db.
 //!
 //! Modes:
-//! - `precc-miner` — run daemon (default: poll every 60s)
-//! - `precc-miner --once` — single pass: mine + promote, then exit
-//! - `precc-miner --interval 30` — poll every 30 seconds
-//! - `precc-miner --foreground` — don't write PID file, log to stderr
+//! - `precc-learner` — run daemon (default: poll every 60s)
+//! - `precc-learner --once` — single pass: mine + promote, then exit
+//! - `precc-learner --interval 30` — poll every 30 seconds
+//! - `precc-learner --foreground` — don't write PID file, log to stderr
 
 use anyhow::{Context, Result};
 use precc_core::{db, mining, promote, skills, update_check};
@@ -69,8 +69,8 @@ fn parse_args() -> Args {
                 std::process::exit(0);
             }
             other => {
-                eprintln!("precc-miner: unknown argument: {other}");
-                eprintln!("Run `precc-miner --help` for usage.");
+                eprintln!("precc-learner: unknown argument: {other}");
+                eprintln!("Run `precc-learner --help` for usage.");
                 std::process::exit(1);
             }
         }
@@ -80,10 +80,10 @@ fn parse_args() -> Args {
 }
 
 fn print_help() {
-    eprintln!("precc-miner — background daemon for mining Claude Code sessions");
+    eprintln!("precc-learner — background daemon for mining Claude Code sessions");
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("  precc-miner [OPTIONS]");
+    eprintln!("  precc-learner [OPTIONS]");
     eprintln!();
     eprintln!("OPTIONS:");
     eprintln!("  --once, -1         Single pass: mine + promote, then exit");
@@ -97,7 +97,7 @@ fn print_help() {
 // =============================================================================
 
 fn run_once() -> Result<()> {
-    log("precc-miner: single pass starting");
+    log("precc-learner: single pass starting");
 
     let data_dir = db::data_dir()?;
     let history_conn = db::open_history(&data_dir)?;
@@ -172,7 +172,7 @@ fn run_once() -> Result<()> {
         }
     }
 
-    log("precc-miner: single pass complete");
+    log("precc-learner: single pass complete");
     Ok(())
 }
 
@@ -183,7 +183,7 @@ fn run_once() -> Result<()> {
 fn run_daemon(args: Args) -> Result<()> {
     #[cfg(windows)]
     {
-        eprintln!("precc-miner: daemon mode is not yet supported on Windows.");
+        eprintln!("precc-learner: daemon mode is not yet supported on Windows.");
         eprintln!("Use --once to run a single pass.");
         std::process::exit(1);
     }
@@ -214,7 +214,7 @@ fn run_daemon_unix(args: Args) -> Result<()> {
         let running = running.clone();
         let pid_path = pid_path.clone();
         ctrlc_handler(move || {
-            log("precc-miner: shutting down");
+            log("precc-learner: shutting down");
             running.store(false, Ordering::SeqCst);
             if let Some(ref p) = pid_path {
                 let _ = std::fs::remove_file(p);
@@ -223,7 +223,7 @@ fn run_daemon_unix(args: Args) -> Result<()> {
     }
 
     log(&format!(
-        "precc-miner: daemon started (interval={}s, pid={})",
+        "precc-learner: daemon started (interval={}s, pid={})",
         args.interval,
         std::process::id()
     ));
@@ -248,7 +248,7 @@ fn run_daemon_unix(args: Args) -> Result<()> {
         let _ = std::fs::remove_file(p);
     }
 
-    log("precc-miner: stopped");
+    log("precc-learner: stopped");
     Ok(())
 }
 
@@ -494,7 +494,7 @@ fn check_existing_pid(path: &PathBuf) -> Result<()> {
     // Check if the process is still running
     if process_alive(pid) {
         anyhow::bail!(
-            "another precc-miner is already running (pid={pid}). \
+            "another precc-learner is already running (pid={pid}). \
              Remove {} if this is stale.",
             path.display()
         );

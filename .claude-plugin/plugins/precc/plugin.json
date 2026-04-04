@@ -11,7 +11,7 @@
   "binaries": [
     "precc",
     "precc-hook",
-    "precc-miner"
+    "precc-learner"
   ],
   "env": [
     {
@@ -29,7 +29,7 @@
     {
       "kind": "script",
       "command": "curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash",
-      "bins": ["precc", "precc-hook", "precc-miner"]
+      "bins": ["precc", "precc-hook", "precc-learner"]
     }
   ],
   "commands": [

@@ -349,7 +349,7 @@ pub fn perform_auto_update(data_dir: &Path, version: &str) -> Result<()> {
     let extracted = tmp_dir.path().join(inner_dir);
 
     // Replace binaries
-    for bin in ["precc", "precc-hook", "precc-miner"] {
+    for bin in ["precc", "precc-hook", "precc-learner"] {
         let src = extracted.join(bin);
         let dst = bin_dir.join(bin);
         if !src.exists() {

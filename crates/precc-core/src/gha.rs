@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn parse_full_url() {
         let gha = parse_url("https://github.com/peria-ai/precc-cc/actions/runs/12345").unwrap();
-        assert_eq!(gha.owner, "yijunyu");
+        assert_eq!(gha.owner, "peria-ai");
         assert_eq!(gha.repo, "precc-cc");
         assert_eq!(gha.run_id, 12345);
     }

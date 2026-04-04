@@ -31,14 +31,14 @@ Four crates in a workspace:
 | `precc-core` | lib | Shared logic: context resolution, skill matching, GDB, DB, mining, metrics, RTK rewriting, advisor, sharing, telemetry |
 | `precc-hook` | bin | PreToolUse:Bash hook binary — must complete in < 5ms |
 | `precc-cli` | bin | User-facing CLI: `precc ingest`, `precc skills`, `precc debug`, `precc report` |
-| `precc-miner` | bin | Background daemon that mines session logs for failure patterns |
+| `precc-learner` | bin | Background daemon that mines session logs for failure patterns |
 
 ### Key Files
 
 - `crates/precc-core/src/lib.rs` — Module re-exports
 - `crates/precc-hook/src/main.rs` — Hook entry: reads JSON stdin, runs pipeline, writes JSON stdout
 - `crates/precc-cli/src/main.rs` — CLI entry with clap
-- `crates/precc-miner/src/main.rs` — Daemon entry
+- `crates/precc-learner/src/main.rs` — Daemon entry
 
 ### Data Storage
 

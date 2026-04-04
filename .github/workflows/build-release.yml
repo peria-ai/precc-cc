@@ -119,7 +119,7 @@ jobs:
           cargo zigbuild --release \
             -p precc-hook \
             -p precc-cli \
-            -p precc-miner \
+            -p precc-learner \
             --target ${{ matrix.target }}.2.17
 
       # ---- Build (cargo — macOS / Windows) ----
@@ -133,7 +133,7 @@ jobs:
           cargo build --release \
             -p precc-hook \
             -p precc-cli \
-            -p precc-miner \
+            -p precc-learner \
             --target ${{ matrix.target }}
 
       # ---- Package (Linux / macOS) ----
@@ -147,7 +147,7 @@ jobs:
           mkdir -p "$STAGING"
           cp "target/${{ matrix.target }}/release/precc" "$STAGING/"
           cp "target/${{ matrix.target }}/release/precc-hook" "$STAGING/"
-          cp "target/${{ matrix.target }}/release/precc-miner" "$STAGING/"
+          cp "target/${{ matrix.target }}/release/precc-learner" "$STAGING/"
           tar -czf "$ARCHIVE" "$STAGING"
           echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
 
@@ -162,7 +162,7 @@ jobs:
           New-Item -ItemType Directory -Path $staging | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\precc.exe" "$staging\"
           Copy-Item "target\${{ matrix.target }}\release\precc-hook.exe" "$staging\"
-          Copy-Item "target\${{ matrix.target }}\release\precc-miner.exe" "$staging\"
+          Copy-Item "target\${{ matrix.target }}\release\precc-learner.exe" "$staging\"
           Compress-Archive -Path "$staging\*" -DestinationPath $archive
           echo "ASSET=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 

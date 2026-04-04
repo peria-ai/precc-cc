@@ -97,7 +97,7 @@ try {
         New-Item -ItemType Directory -Path $InstallDir | Out-Null
     }
 
-    foreach ($bin in @("precc.exe", "precc-hook.exe", "precc-miner.exe")) {
+    foreach ($bin in @("precc.exe", "precc-hook.exe", "precc-learner.exe")) {
         $src = Join-Path $Extracted $bin
         if (Test-Path $src) {
             $dst = Join-Path $InstallDir $bin

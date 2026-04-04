@@ -18,6 +18,8 @@ DEFAULT_PREFIX="${HOME}/.local"
 # ---------------------------------------------------------------------------
 VERSION=""
 PREFIX="${INSTALL_PREFIX:-$DEFAULT_PREFIX}"
+NO_VERIFY=""
+EXTRAS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -28,6 +30,14 @@ while [[ $# -gt 0 ]]; do
         --prefix)
             PREFIX="$2"
             shift 2
+            ;;
+        --no-verify)
+            NO_VERIFY=1
+            shift
+            ;;
+        --extras)
+            EXTRAS=1
+            shift
             ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -101,27 +111,31 @@ echo "Downloading ${URL}..."
 curl -fsSL --progress-bar -o "${TMP}/${ARCHIVE}" "${URL}"
 
 # ---------------------------------------------------------------------------
-# Verify SHA256 checksum (if checksums file is available in the release)
+# Verify SHA256 checksum (mandatory — use --no-verify to skip)
 # ---------------------------------------------------------------------------
 CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
 if curl -fsSL -o "${TMP}/SHA256SUMS" "${CHECKSUM_URL}" 2>/dev/null; then
     echo "Verifying SHA256 checksum..."
     EXPECTED="$(grep "${ARCHIVE}" "${TMP}/SHA256SUMS" | awk '{print $1}')"
-    if [[ -n "${EXPECTED}" ]]; then
-        ACTUAL="$(sha256sum "${TMP}/${ARCHIVE}" 2>/dev/null || shasum -a 256 "${TMP}/${ARCHIVE}" 2>/dev/null | awk '{print $1}')"
-        ACTUAL="$(echo "${ACTUAL}" | awk '{print $1}')"
-        if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
-            echo "Checksum mismatch!" >&2
-            echo "  Expected: ${EXPECTED}" >&2
-            echo "  Got:      ${ACTUAL}" >&2
-            exit 1
-        fi
-        echo "  Checksum verified: ${ACTUAL}"
-    else
-        echo "  Warning: no checksum entry for ${ARCHIVE} in SHA256SUMS — skipping verification"
+    if [[ -z "${EXPECTED}" ]]; then
+        echo "ERROR: no checksum entry for ${ARCHIVE} in SHA256SUMS — aborting." >&2
+        exit 1
     fi
+    ACTUAL="$(sha256sum "${TMP}/${ARCHIVE}" 2>/dev/null || shasum -a 256 "${TMP}/${ARCHIVE}" 2>/dev/null | awk '{print $1}')"
+    ACTUAL="$(echo "${ACTUAL}" | awk '{print $1}')"
+    if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
+        echo "Checksum mismatch!" >&2
+        echo "  Expected: ${EXPECTED}" >&2
+        echo "  Got:      ${ACTUAL}" >&2
+        exit 1
+    fi
+    echo "  Checksum verified: ${ACTUAL}"
+elif [[ -n "${NO_VERIFY}" ]]; then
+    echo "  Warning: SHA256SUMS not available — skipping verification (--no-verify)"
 else
-    echo "  Note: SHA256SUMS not available for this release — skipping checksum verification"
+    echo "ERROR: SHA256SUMS not available for this release — aborting for security." >&2
+    echo "  Use --no-verify to skip checksum verification (not recommended)." >&2
+    exit 1
 fi
 
 echo "Extracting..."
@@ -133,7 +147,7 @@ EXTRACTED="${TMP}/precc-${VERSION}-${TARGET}"
 # ---------------------------------------------------------------------------
 mkdir -p "${BIN_DIR}"
 
-for bin in precc precc-hook precc-miner; do
+for bin in precc precc-hook precc-learner; do
     if [[ -f "${EXTRACTED}/${bin}" ]]; then
         install -m 755 "${EXTRACTED}/${bin}" "${BIN_DIR}/${bin}"
         echo "  Installed ${BIN_DIR}/${bin}"
@@ -270,13 +284,7 @@ install_lean_ctx() {
         fi
     fi
 
-    # Fallback: universal installer
-    if curl -fsSL https://leanctx.com/install.sh 2>/dev/null | bash; then
-        echo "  Installed lean-ctx via universal installer"
-        return 0
-    fi
-
-    # Last resort: cargo (slow, compiles from source)
+    # Fallback: cargo (slow, compiles from source)
     if command -v cargo &>/dev/null; then
         echo "  Building lean-ctx from source (this may take a few minutes)..."
         cargo install lean-ctx 2>/dev/null && echo "  Installed lean-ctx via cargo" && return 0
@@ -352,6 +360,35 @@ install_rtk() {
     echo "  Skipped: install RTK manually — see https://github.com/rtk-ai/rtk"
     return 1
 }
+
+# ---------------------------------------------------------------------------
+# Optional companion tools (rtk, lean-ctx, nushell, cocoindex-code)
+# Installed with --extras, or by answering "y" at the interactive prompt.
+# Skipped automatically when stdin is not a terminal (e.g. curl | bash).
+# ---------------------------------------------------------------------------
+if [[ -z "${EXTRAS}" ]]; then
+    if [[ -t 0 ]]; then
+        echo ""
+        echo "PRECC works on its own, but optional companion tools can enhance it:"
+        echo "  - RTK: token-optimized CLI output (saves 60-90% per command)"
+        echo "  - lean-ctx: deep output compression (saves up to 88% of context tokens)"
+        echo "  - Nushell: structured shell for compact output"
+        echo "  - cocoindex-code: AST-driven semantic code search"
+        echo ""
+        printf "Install companion tools? [Y/n] "
+        read -r REPLY
+        case "${REPLY}" in
+            [nN]*) EXTRAS="" ;;
+            *)     EXTRAS=1 ;;
+        esac
+    else
+        echo ""
+        echo "Non-interactive mode: skipping optional companion tools."
+        echo "  Re-run with --extras to install them: bash install.sh --extras"
+    fi
+fi
+
+if [[ -n "${EXTRAS}" ]]; then
 
 install_rtk
 
@@ -451,6 +488,11 @@ wire_mcp_cocoindex() {
 
 install_cocoindex_code
 wire_mcp_cocoindex
+
+else
+    echo ""
+    echo "Skipped companion tools. To install later: bash install.sh --extras"
+fi
 
 # ---------------------------------------------------------------------------
 # Done

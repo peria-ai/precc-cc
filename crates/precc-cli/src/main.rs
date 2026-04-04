@@ -3475,7 +3475,7 @@ fn cmd_update(force: bool, requested_version: Option<String>, auto: bool) -> Res
     let extracted = tmp_dir.path().join(inner_dir);
 
     // ── 8. Replace binaries ───────────────────────────────────────────────────
-    for bin in ["precc", "precc-hook", "precc-miner"] {
+    for bin in ["precc", "precc-hook", "precc-learner"] {
         let src = extracted.join(bin);
         let dst = bin_dir.join(bin);
         if !src.exists() {

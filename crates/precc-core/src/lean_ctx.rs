@@ -114,7 +114,7 @@ fn shell_quote(s: &str) -> String {
 const SKIP_PREFIXES: &[&str] = &[
     "precc",
     "precc-hook",
-    "precc-miner",
+    "precc-learner",
     "lean-ctx",
     "rtk",
     "nu ",
@@ -262,7 +262,7 @@ mod tests {
         assert!(wrap("precc init").is_none());
         assert!(wrap("precc update --force").is_none());
         assert!(wrap("precc-hook").is_none());
-        assert!(wrap("precc-miner --interval 60").is_none());
+        assert!(wrap("precc-learner --interval 60").is_none());
     }
 
     #[test]

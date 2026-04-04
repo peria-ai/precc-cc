@@ -96,7 +96,7 @@ To enable manually, add to `~/.claude/settings.json`:
 
 - **`~/.claude/settings.json`** — Adds a `PreToolUse` hook entry pointing to `precc-hook`
 - **`~/.local/share/precc/`** — SQLite databases for learned failure-fix patterns and skill heuristics
-- **`~/.local/bin/`** — Installs `precc`, `precc-hook`, and `precc-miner` binaries
+- **`~/.local/bin/`** — Installs `precc`, `precc-hook`, and `precc-learner` binaries
 
 ## Usage
 
