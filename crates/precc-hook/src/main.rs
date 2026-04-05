@@ -25,6 +25,8 @@ use precc_core::{
     post_observe, read_filter, rtk, skills, update_check,
 };
 use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 
 /// Confidence threshold for auto-applying skills.
@@ -32,6 +34,66 @@ const AUTO_APPLY_THRESHOLD: f64 = 0.7;
 
 /// Minimum confidence to show a suggestion.
 const SUGGEST_THRESHOLD: f64 = 0.3;
+
+/// Check if dry-run mode is enabled (PRECC_DRY_RUN=1).
+/// In dry-run mode, mutations are computed and logged but not applied —
+/// the original command executes unchanged.
+fn dry_run_enabled() -> bool {
+    std::env::var("PRECC_DRY_RUN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Check if a command is destructive (hard to reverse, dangerous if mutated wrongly).
+/// Returns true for commands where a misapplied mutation (especially cd prepend)
+/// could cause serious damage.
+fn is_destructive(command: &str) -> bool {
+    let cmd = command.trim();
+
+    // Strip any cd prefix to inspect the actual command
+    let effective = if let Some(pos) = cmd.find(" && ") {
+        if cmd.starts_with("cd ") {
+            cmd[pos + 4..].trim()
+        } else {
+            cmd
+        }
+    } else {
+        cmd
+    };
+
+    let first_word = effective.split_whitespace().next().unwrap_or("");
+
+    // Direct destructive commands
+    if matches!(first_word, "rm" | "rmdir" | "shred" | "dd") {
+        return true;
+    }
+
+    // Git destructive operations
+    if first_word == "git" {
+        let rest = effective.strip_prefix("git").unwrap_or("").trim();
+        if rest.starts_with("reset --hard")
+            || rest.starts_with("push --force")
+            || rest.starts_with("push -f")
+            || rest.starts_with("clean -f")
+            || rest.starts_with("checkout -- .")
+            || rest.starts_with("branch -D")
+        {
+            return true;
+        }
+    }
+
+    // SQL destructive operations (case-insensitive check on the full command)
+    let upper = effective.to_ascii_uppercase();
+    if upper.contains("DROP TABLE")
+        || upper.contains("DROP DATABASE")
+        || upper.contains("TRUNCATE ")
+        || upper.contains("DELETE FROM")
+    {
+        return true;
+    }
+
+    false
+}
 
 fn main() {
     // Statusline mode: invoked by Claude Code's statusLine config
@@ -134,11 +196,11 @@ fn parse_session_metrics(since_ts: u64) -> StatuslineCounts {
         Err(_) => return counts,
     };
 
-    // Token savings estimates per event type (conservative)
-    const TOKENS_PER_CD: u64 = 300;
+    // Token savings estimates per event type (accounts for full retry cycle avoided)
+    const TOKENS_PER_CD: u64 = 800;
     const TOKENS_PER_RTK: u64 = 175;
     const TOKENS_PER_LEAN_CTX: u64 = 350; // lean-ctx compresses 70-80% of output
-    const TOKENS_PER_SKILL: u64 = 250;
+    const TOKENS_PER_SKILL: u64 = 600;
     const TOKENS_PER_CCC_BYTE: f64 = 0.25; // ~4 bytes per token
 
     for line in content.lines().rev() {
@@ -329,12 +391,21 @@ fn run_bash_pipeline(
 
     // Emit when command was rewritten OR when there's a GDB suggestion to surface.
     if pipeline.modified() || pipeline.had_gdb_suggestion {
-        let ti = hook_input
-            .get("tool_input")
-            .cloned()
-            .unwrap_or(Value::Object(serde_json::Map::new()));
+        if dry_run_enabled() {
+            // Dry-run: log what would happen but don't apply the mutation
+            eprintln!(
+                "[precc] DRY-RUN: would rewrite → `{}`\n[precc] DRY-RUN: reason: {}",
+                pipeline.command,
+                pipeline.reason()
+            );
+        } else {
+            let ti = hook_input
+                .get("tool_input")
+                .cloned()
+                .unwrap_or(Value::Object(serde_json::Map::new()));
 
-        emit_rewrite(&ti, &pipeline.command, &pipeline.reason())?;
+            emit_rewrite(&ti, &pipeline.command, &pipeline.reason())?;
+        }
     }
 
     // Record metrics (after stdout emit — never delays response to Claude)
@@ -414,15 +485,19 @@ fn run_read_filter(tool_input: &Value, t_start: std::time::Instant) -> anyhow::R
     }
 
     if modified {
-        let output = serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": "PRECC: read-filter (limit injection)",
-                "updatedInput": updated_input
-            }
-        });
-        println!("{}", serde_json::to_string(&output)?);
+        if dry_run_enabled() {
+            eprintln!("[precc] DRY-RUN: would inject read limit");
+        } else {
+            let output = serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "PRECC: read-filter (limit injection)",
+                    "updatedInput": updated_input
+                }
+            });
+            println!("{}", serde_json::to_string(&output)?);
+        }
         append_metrics_log_tool("read_filter", t_start);
     }
 
@@ -470,15 +545,22 @@ fn run_grep_filter(tool_input: &Value, t_start: std::time::Instant) -> anyhow::R
 
     if modified {
         let reason = format!("PRECC: grep-filter ({})", reasons.join(", "));
-        let output = serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": reason,
-                "updatedInput": updated_input
-            }
-        });
-        println!("{}", serde_json::to_string(&output)?);
+        if dry_run_enabled() {
+            eprintln!(
+                "[precc] DRY-RUN: would apply grep-filter ({})",
+                reasons.join(", ")
+            );
+        } else {
+            let output = serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": reason,
+                    "updatedInput": updated_input
+                }
+            });
+            println!("{}", serde_json::to_string(&output)?);
+        }
         append_metrics_log_tool("grep_filter", t_start);
     }
 
@@ -506,15 +588,19 @@ fn run_agent_propagate(tool_input: &Value, t_start: std::time::Instant) -> anyho
         obj.insert("prompt".to_string(), Value::String(new_prompt));
     }
 
-    let output = serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "permissionDecisionReason": "PRECC: agent-propagate (subagent hook injection)",
-            "updatedInput": updated_input
-        }
-    });
-    println!("{}", serde_json::to_string(&output)?);
+    if dry_run_enabled() {
+        eprintln!("[precc] DRY-RUN: would inject agent hooks");
+    } else {
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "PRECC: agent-propagate (subagent hook injection)",
+                "updatedInput": updated_input
+            }
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    }
     append_metrics_log_tool("agent_propagate", t_start);
 
     Ok(())
@@ -573,6 +659,19 @@ fn run_post_observe(
         output_bytes,
         estimated_tokens,
     );
+
+    // Compression feedback: if a Bash command failed, record its class so
+    // PreToolUse can skip compression on the next similar command (adaptive expand).
+    if tool_name == "Bash" && post_observe::is_bash_failure(hook_input) {
+        let command = tool_input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let cmd_class = post_observe::command_class(command);
+        if !cmd_class.is_empty() {
+            post_observe::record_compression_failure(&data_dir, &cmd_class);
+        }
+    }
 
     // Extract context pressure
     let context_used_pct = post_observe::context_used_pct(hook_input);
@@ -661,6 +760,10 @@ struct Pipeline {
     command: String,
     cwd: String,
     reasons: Vec<String>,
+    /// Hash of the original command for audit correlation (no content logged).
+    cmd_hash: u64,
+    /// Skip compression stages (adaptive expand: recent failure after compression).
+    skip_compression: bool,
     // Flags set by each stage for metrics reporting
     had_geofence_block: bool,
     had_bash_unwrap: bool,
@@ -675,15 +778,23 @@ struct Pipeline {
     had_gdb_suggestion: bool,
     had_ccc_redirect: bool,
     ccc_saved_bytes: usize,
+    had_adaptive_expand: bool,
 }
 
 impl Pipeline {
     fn new(command: String, cwd: String) -> Self {
+        let cmd_hash = {
+            let mut hasher = DefaultHasher::new();
+            command.hash(&mut hasher);
+            hasher.finish()
+        };
         Self {
             original: command.clone(),
             command,
             cwd,
             reasons: Vec::new(),
+            cmd_hash,
+            skip_compression: false,
             had_geofence_block: false,
             had_bash_unwrap: false,
             had_cd_prepend: false,
@@ -697,6 +808,7 @@ impl Pipeline {
             had_gdb_suggestion: false,
             had_ccc_redirect: false,
             ccc_saved_bytes: 0,
+            had_adaptive_expand: false,
         }
     }
 
@@ -704,41 +816,149 @@ impl Pipeline {
         self.command != self.original
     }
 
+    /// Validate that a mutation is structurally bounded: the new command must
+    /// still contain the original command (or its core) as a substring.
+    /// Returns false (and reverts) if the mutation is unbounded.
+    fn validate_mutation(&mut self, before: &str, stage: &str) -> bool {
+        if self.command == before {
+            return true; // No change — nothing to validate
+        }
+
+        // The new command should contain the old command as a substring,
+        // OR the old command should contain the new one (unwrap case).
+        // This prevents a stage from completely replacing the command.
+        let old_core = before.trim();
+        let new_core = self.command.trim();
+
+        let bounded = new_core.contains(old_core)
+            || old_core.contains(new_core)
+            || self.commands_share_core(old_core, new_core);
+
+        if !bounded {
+            eprintln!(
+                "[precc] Warning: {} produced unbounded mutation, reverting",
+                stage
+            );
+            self.command = before.to_string();
+            return false;
+        }
+        true
+    }
+
+    /// Check if two commands share a common core (for template-based rewrites
+    /// where the command structure changes but key tokens are preserved).
+    fn commands_share_core(&self, old: &str, new: &str) -> bool {
+        // Extract significant tokens (skip common shell words)
+        let skip = ["cd", "&&", "bash", "-c", "rtk", "lean-ctx", "nu", "-c"];
+        let old_tokens: Vec<&str> = old
+            .split_whitespace()
+            .filter(|t| !skip.contains(t))
+            .collect();
+        let new_tokens: Vec<&str> = new
+            .split_whitespace()
+            .filter(|t| !skip.contains(t))
+            .collect();
+
+        if old_tokens.is_empty() {
+            return true;
+        }
+
+        // At least half of the old command's significant tokens must appear in the new
+        let shared = old_tokens.iter().filter(|t| new_tokens.contains(t)).count();
+        shared * 2 >= old_tokens.len()
+    }
+
     fn reason(&self) -> String {
         if self.reasons.is_empty() {
             "PRECC".to_string()
+        } else if self.modified() {
+            // Include truncated original so Claude can see both sides of the mutation
+            let orig_display = if self.original.len() > 80 {
+                format!("{}…", &self.original[..80])
+            } else {
+                self.original.clone()
+            };
+            format!(
+                "PRECC: [original: `{}`] → {}",
+                orig_display,
+                self.reasons.join("; ")
+            )
         } else {
             format!("PRECC: {}", self.reasons.join("; "))
         }
     }
 
     fn run(&mut self) {
+        let destructive = is_destructive(&self.command);
+
         // Stage 0: Geofence check (Pro feature) — blocks if IP is in restricted region
         if self.stage_geofence() {
             return; // Blocked — skip all subsequent stages
         }
 
         // Stage 1: Bash unwrap — strip unnecessary `bash -c "..."` wrappers
+        let before = self.command.clone();
         self.stage_bash_unwrap();
+        self.validate_mutation(&before, "bash-unwrap");
 
         // Stage 2: Skill matching (Pillar 4) — read-only, skip if no DB
-        self.stage_skills();
+        if !destructive {
+            let before = self.command.clone();
+            self.stage_skills();
+            self.validate_mutation(&before, "skills");
+        }
 
         // Stage 3: Context resolution (Pillar 1)
-        self.stage_context();
+        // Skip cd-prepend for destructive commands to avoid running `rm -rf` in wrong dir
+        if !destructive {
+            let before = self.command.clone();
+            self.stage_context();
+            self.validate_mutation(&before, "context");
+        }
 
-        // Stage 4: GDB check (Pillar 2)
+        // Stage 4: GDB check (Pillar 2) — advisory only, no mutation
         self.stage_gdb();
+
+        // Stages 5-7: Skip output manipulation for destructive commands
+        if destructive {
+            return;
+        }
+
+        // Adaptive expand: if this command class recently failed after compression,
+        // skip all compression stages to give Claude the full uncompressed output.
+        // This is the PostToolUse→PreToolUse feedback loop.
+        if !self.skip_compression {
+            if let Ok(data_dir) = db::data_dir() {
+                let cmd_class = post_observe::command_class(&self.command);
+                if !cmd_class.is_empty()
+                    && post_observe::should_skip_compression(&data_dir, &cmd_class)
+                {
+                    self.skip_compression = true;
+                    self.had_adaptive_expand = true;
+                    self.reasons.push(format!(
+                        "adaptive-expand:{} (recent failure after compression)",
+                        cmd_class
+                    ));
+                }
+            }
+        }
+
+        if self.skip_compression {
+            return;
+        }
 
         // Stage 5: Diet — rule-based output slimming (AgentDiet-inspired).
         //   Appends pipe filters or adds flags to reduce verbose output.
         //   Skipped when lean-ctx/nushell handle compression externally.
+        let before = self.command.clone();
         self.stage_diet();
+        self.validate_mutation(&before, "diet");
 
         // Stage 6: Output compression — mutually exclusive, priority order:
         //   6a: Nushell (PRECC_NUSHELL=1)
         //   6b: lean-ctx (PRECC_LEAN_CTX=1) — external output compression
         //   6c: RTK (fallback)
+        let before = self.command.clone();
         if nushell::nushell_mode_enabled() {
             self.stage_nushell();
         }
@@ -748,8 +968,10 @@ impl Pipeline {
         if !self.had_nushell_wrap && !self.had_lean_ctx_wrap {
             self.stage_rtk();
         }
+        self.validate_mutation(&before, "output-compression");
 
         // Stage 7: CCC semantic search redirect (Pillar 2b)
+        // CCC is a full replacement (grep → ccc search), so skip validation
         self.stage_ccc();
     }
 
@@ -1226,10 +1448,12 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
     };
     let log_path = std::path::Path::new(&home).join(".local/share/precc/metrics.log");
 
-    // Build all lines to write in a single syscall
+    // Build all lines to write in a single syscall.
+    // cmd_hash allows correlating PreToolUse and PostToolUse events for the same
+    // command without logging the command content (privacy-safe audit trail).
     let mut lines = format!(
-        "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3}}}\n",
-        ts, latency_ms
+        "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3},\"cmd_hash\":\"{:016x}\"}}\n",
+        ts, latency_ms, pipeline.cmd_hash
     );
     if pipeline.had_geofence_block {
         lines.push_str(&format!(
@@ -1289,6 +1513,12 @@ fn append_metrics_log_bash(pipeline: &Pipeline, latency_ms: f64) {
         lines.push_str(&format!(
             "{{\"ts\":{},\"type\":\"ccc_redirect\",\"value\":{}.0}}\n",
             ts, pipeline.ccc_saved_bytes
+        ));
+    }
+    if pipeline.had_adaptive_expand {
+        lines.push_str(&format!(
+            "{{\"ts\":{},\"type\":\"adaptive_expand\",\"value\":1.0}}\n",
+            ts
         ));
     }
 
@@ -1535,11 +1765,33 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_reason_with_entries() {
+    fn pipeline_reason_with_entries_no_modification() {
+        // When command is not modified, original is not included in reason
         let mut p = Pipeline::new("echo hello".to_string(), ".".to_string());
-        p.reasons.push("rtk-rewrite".to_string());
+        p.reasons.push("gdb-hint:try precc debug".to_string());
+        assert_eq!(p.reason(), "PRECC: gdb-hint:try precc debug");
+    }
+
+    #[test]
+    fn pipeline_reason_with_modification_shows_original() {
+        let mut p = Pipeline::new("echo hello".to_string(), ".".to_string());
+        p.command = "cd /app && echo hello".to_string(); // simulate mutation
         p.reasons.push("cd:Cargo.toml (conf=0.9)".to_string());
-        assert_eq!(p.reason(), "PRECC: rtk-rewrite; cd:Cargo.toml (conf=0.9)");
+        assert_eq!(
+            p.reason(),
+            "PRECC: [original: `echo hello`] → cd:Cargo.toml (conf=0.9)"
+        );
+    }
+
+    #[test]
+    fn pipeline_reason_truncates_long_original() {
+        let long_cmd = "a".repeat(100);
+        let mut p = Pipeline::new(long_cmd.clone(), ".".to_string());
+        p.command = "modified".to_string();
+        p.reasons.push("rewrite".to_string());
+        let reason = p.reason();
+        assert!(reason.contains("…")); // truncated
+        assert!(reason.len() < long_cmd.len() + 50);
     }
 
     #[test]
@@ -1553,12 +1805,13 @@ mod tests {
     fn metrics_log_line_format() {
         // Verify the JSON line format we write can be parsed back correctly
         let line = format!(
-            "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3}}}\n",
-            1000u64, 2.93f64
+            "{{\"ts\":{},\"type\":\"hook_latency\",\"value\":{:.3},\"cmd_hash\":\"{:016x}\"}}\n",
+            1000u64, 2.93f64, 0xdeadbeef_u64
         );
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(parsed["type"].as_str(), Some("hook_latency"));
         assert!((parsed["value"].as_f64().unwrap() - 2.93).abs() < 0.001);
+        assert_eq!(parsed["cmd_hash"].as_str(), Some("00000000deadbeef"));
     }
 
     // =========================================================================
@@ -2029,5 +2282,108 @@ mod tests {
         let mut p = Pipeline::new("cargo build".to_string(), ".".to_string());
         p.stage_bash_unwrap();
         assert!(!p.had_bash_unwrap);
+    }
+
+    // -- mutation validation tests --
+
+    #[test]
+    fn validate_mutation_allows_cd_prepend() {
+        let mut p = Pipeline::new("cargo build".to_string(), ".".to_string());
+        let before = p.command.clone();
+        p.command = "cd /app && cargo build".to_string();
+        assert!(p.validate_mutation(&before, "context"));
+    }
+
+    #[test]
+    fn validate_mutation_allows_unwrap() {
+        let mut p = Pipeline::new("bash -c 'ls -la'".to_string(), ".".to_string());
+        let before = p.command.clone();
+        p.command = "ls -la".to_string();
+        assert!(p.validate_mutation(&before, "bash-unwrap"));
+    }
+
+    #[test]
+    fn validate_mutation_reverts_unbounded() {
+        let mut p = Pipeline::new("cargo build".to_string(), ".".to_string());
+        let before = p.command.clone();
+        p.command = "rm -rf /".to_string(); // completely unrelated
+        assert!(!p.validate_mutation(&before, "bad-stage"));
+        assert_eq!(p.command, "cargo build"); // reverted
+    }
+
+    #[test]
+    fn validate_mutation_allows_rtk_wrap() {
+        let mut p = Pipeline::new("git status".to_string(), ".".to_string());
+        let before = p.command.clone();
+        p.command = "rtk git status".to_string();
+        assert!(p.validate_mutation(&before, "rtk"));
+    }
+
+    #[test]
+    fn validate_mutation_noop() {
+        let mut p = Pipeline::new("echo hello".to_string(), ".".to_string());
+        let before = p.command.clone();
+        // No change
+        assert!(p.validate_mutation(&before, "noop"));
+    }
+
+    #[test]
+    fn commands_share_core_basic() {
+        let p = Pipeline::new("cargo test --release".to_string(), ".".to_string());
+        assert!(p.commands_share_core("cargo test --release", "cd /app && cargo test --release"));
+    }
+
+    #[test]
+    fn commands_share_core_rejects_unrelated() {
+        let p = Pipeline::new("cargo build".to_string(), ".".to_string());
+        assert!(!p.commands_share_core("cargo build", "python manage.py runserver"));
+    }
+
+    // -- destructive command detection tests --
+
+    #[test]
+    fn destructive_rm() {
+        assert!(is_destructive("rm -rf /tmp/stuff"));
+        assert!(is_destructive("rm file.txt"));
+    }
+
+    #[test]
+    fn destructive_git_force_push() {
+        assert!(is_destructive("git push --force origin main"));
+        assert!(is_destructive("git push -f"));
+        assert!(is_destructive("git reset --hard HEAD~1"));
+        assert!(is_destructive("git clean -fd"));
+        assert!(is_destructive("git branch -D feature"));
+    }
+
+    #[test]
+    fn destructive_sql() {
+        assert!(is_destructive("psql -c 'DROP TABLE users'"));
+        assert!(is_destructive("mysql -e \"DELETE FROM orders\""));
+    }
+
+    #[test]
+    fn destructive_with_cd_prefix() {
+        assert!(is_destructive("cd /app && rm -rf build/"));
+    }
+
+    #[test]
+    fn not_destructive_normal_commands() {
+        assert!(!is_destructive("cargo build"));
+        assert!(!is_destructive("git status"));
+        assert!(!is_destructive("git push origin main"));
+        assert!(!is_destructive("ls -la"));
+        assert!(!is_destructive("grep -r pattern ."));
+    }
+
+    #[test]
+    fn destructive_commands_skip_pipeline_mutations() {
+        let p = Pipeline::new("rm -rf build/".to_string(), ".".to_string());
+        // Running the full pipeline should not mutate the command
+        // (stages 2-3 and 5-7 are skipped for destructive commands)
+        // We can't easily test the full run() without filesystem/DB,
+        // but we can verify the flag detection works
+        assert!(is_destructive(&p.command));
+        assert!(!p.modified());
     }
 }

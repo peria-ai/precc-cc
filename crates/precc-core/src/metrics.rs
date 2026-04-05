@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use rusqlite::Connection;
+use serde_json;
 
 /// Metric types recorded by the hook.
 pub enum MetricType<'a> {
@@ -85,6 +86,63 @@ pub fn summary(conn: &Connection, metric_type: MetricType) -> Result<Option<Metr
     } else {
         Ok(Some(result))
     }
+}
+
+/// Import pending metrics from `metrics.log` into `metrics.db`.
+///
+/// The hook writes to `metrics.log` (O_APPEND, no DB overhead) and the learner
+/// daemon imports periodically. This function performs the same import on demand
+/// so that CLI commands like `precc savings` see up-to-date data even when the
+/// daemon isn't running.
+///
+/// Uses atomic rename to avoid double-counting with a concurrent learner.
+/// Returns the number of entries imported.
+pub fn import_log(conn: &Connection, data_dir: &std::path::Path) -> Result<usize> {
+    let log_path = data_dir.join("metrics.log");
+    if !log_path.exists() {
+        return Ok(0);
+    }
+
+    // Atomically rename so the hook can write a new log concurrently
+    let processing_path = data_dir.join("metrics.log.processing");
+    if let Err(_e) = std::fs::rename(&log_path, &processing_path) {
+        // Another process (learner) may be importing — skip silently
+        return Ok(0);
+    }
+
+    let content = match std::fs::read_to_string(&processing_path) {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = std::fs::remove_file(&processing_path);
+            return Ok(0);
+        }
+    };
+
+    let mut count = 0;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let metric_type = match parsed.get("type").and_then(|v| v.as_str()) {
+            Some(t) => t.to_string(),
+            None => continue,
+        };
+        let value = parsed.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
+
+        let _ = conn.execute(
+            "INSERT INTO metrics (timestamp, metric_type, value, metadata)
+             VALUES (datetime('now'), ?1, ?2, NULL)",
+            rusqlite::params![metric_type, value],
+        );
+        count += 1;
+    }
+
+    let _ = std::fs::remove_file(&processing_path);
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -206,5 +264,60 @@ mod tests {
         assert_eq!(MetricType::GdbSuggestion.as_str(), "gdb_suggestion");
         assert_eq!(MetricType::RtkRewrite.as_str(), "rtk_rewrite");
         assert_eq!(MetricType::MinerTick.as_str(), "miner_tick");
+    }
+
+    #[test]
+    fn import_log_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::open_metrics(dir.path()).unwrap();
+
+        // Write a fake metrics.log
+        let log = dir.path().join("metrics.log");
+        std::fs::write(
+            &log,
+            "{\"ts\":1000,\"type\":\"rtk_rewrite\",\"value\":1.0}\n\
+             {\"ts\":1001,\"type\":\"cd_prepend\",\"value\":1.0}\n\
+             {\"ts\":1002,\"type\":\"hook_latency\",\"value\":2.5}\n",
+        )
+        .unwrap();
+
+        let imported = import_log(&conn, dir.path()).unwrap();
+        assert_eq!(imported, 3);
+
+        // Verify data is in metrics.db
+        let rtk = summary(&conn, MetricType::RtkRewrite).unwrap().unwrap();
+        assert_eq!(rtk.count, 1);
+
+        let cd = summary(&conn, MetricType::CdPrepend).unwrap().unwrap();
+        assert_eq!(cd.count, 1);
+
+        // Log file should be removed
+        assert!(!log.exists());
+    }
+
+    #[test]
+    fn import_log_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::open_metrics(dir.path()).unwrap();
+        let imported = import_log(&conn, dir.path()).unwrap();
+        assert_eq!(imported, 0);
+    }
+
+    #[test]
+    fn import_log_skips_bad_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::open_metrics(dir.path()).unwrap();
+
+        let log = dir.path().join("metrics.log");
+        std::fs::write(
+            &log,
+            "not json\n\
+             {\"ts\":1000,\"type\":\"rtk_rewrite\",\"value\":1.0}\n\
+             {\"no_type\":true}\n",
+        )
+        .unwrap();
+
+        let imported = import_log(&conn, dir.path()).unwrap();
+        assert_eq!(imported, 1);
     }
 }

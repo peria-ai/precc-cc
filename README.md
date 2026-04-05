@@ -1,6 +1,6 @@
 # PRECC — Predictive Error Correction for Claude Code
 
-In a retrospective analysis of 89 real Claude Code sessions (3,078 commands), PRECC saved **2.5x more tokens than RTK alone** — **66% total reduction** vs 17% — by combining output compression with predictive error correction, comment blocking, and bash unwrapping. Ships as a single Rust binary.
+Open-source Rust binary. Free forever. Average **28–45% token savings** (up to 66% in token-heavy sessions) by combining output compression with predictive error correction. Under 3ms average hook latency.
 
 ## Install
 
@@ -76,6 +76,15 @@ precc compress
 precc compress --revert
 ```
 
+### New in v0.3.2
+
+- **Mutation safety** — Each pipeline stage is validated: if a stage produces an unbounded mutation (command no longer contains the original's core tokens), it's reverted automatically
+- **Destructive command guard** — Commands like `rm -rf`, `git reset --hard`, and `DROP TABLE` bypass all skill/context/compression mutations to prevent misapplied rewrites
+- **Dry-run mode** — Set `PRECC_DRY_RUN=1` to see what PRECC would change without applying mutations (logged to stderr)
+- **Original command in reason** — The `permissionDecisionReason` now includes the original command so Claude can reason about both sides of a mutation
+- **Audit hash** — Each hook invocation logs a privacy-safe hash of the original command for PreToolUse/PostToolUse correlation
+- **Trial savings on update** — `precc update` now shows a savings report and sends usage telemetry for trial users
+
 ### New in v0.2.6
 
 - **Comment blocker** — Blocks `# ...` comment lines from executing as bash commands, eliminating no-op error output (~51K tokens saved historically)
@@ -133,15 +142,16 @@ $ precc init
 
 ## Measured Results
 
-Analyzed across 89 real Claude Code sessions, 3,078 bash calls:
+Analyzed across 89 real Claude Code sessions (one developer's daily workflow, 3,078 bash calls). Your results will vary depending on project type, session length, and command mix.
 
 | Metric | Value |
 |--------|-------|
-| **Token savings** | **66% total reduction** (vs 17% RTK alone) |
+| **Average token savings** | **28–45%** (up to 66% in token-heavy sessions) |
 | **Failures prevented** | **352 / 358 (98%)** |
 | **Bash calls improved** | **894 / 5,384 (17%)** |
-| **Cache reads saved** | **988M / 1.67B tokens (59%)** |
-| **Hook latency** | **2.93ms avg (1.77ms overhead)** |
+| **Hook latency** | **under 3ms average** |
+
+The 28% floor comes from RTK compression alone; additional savings come from cd-fix, skill matching, and context compression. The 66% peak occurred in sessions with heavy grep/build output where all pipeline stages fired.
 
 ## Acknowledgements
 

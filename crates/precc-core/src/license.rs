@@ -100,6 +100,12 @@ impl License {
         Some(self.expiry_days as i64 - now_days as i64)
     }
 
+    /// A trial license is a native PRECC key with a finite expiry.
+    /// Stripe/Gumroad/GitHub keys are not trials (they have expiry_days == 0).
+    pub fn is_trial(&self) -> bool {
+        self.expiry_days != 0 && self.is_pro()
+    }
+
     pub fn edition_name(&self) -> &'static str {
         if self.is_enterprise() {
             "Enterprise"
@@ -162,6 +168,14 @@ pub fn tier() -> Tier {
         }
         _ => Tier::Free,
     })
+}
+
+/// Check if the current license is a trial (native key with finite expiry).
+pub fn is_trial() -> bool {
+    match load() {
+        Ok(Some(lic)) if !lic.is_expired() => lic.is_trial(),
+        _ => false,
+    }
 }
 
 /// Emit a consistent upgrade prompt to stderr and return an error.

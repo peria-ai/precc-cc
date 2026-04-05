@@ -70,7 +70,8 @@ pub fn serve(port: Option<u16>, stripe_secret: Option<String>) -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("[TELEMETRY ERR] {e}");
-                    let resp = tiny_http::Response::from_string("Bad request").with_status_code(400);
+                    let resp =
+                        tiny_http::Response::from_string("Bad request").with_status_code(400);
                     let _ = request.respond(resp);
                 }
             }
@@ -138,7 +139,8 @@ fn handle_telemetry(request: &mut tiny_http::Request) -> Result<()> {
     let line = serde_json::to_string(&record)?;
     writeln!(file, "{line}")?;
 
-    eprintln!("[TELEMETRY] v={} os={} tier={}",
+    eprintln!(
+        "[TELEMETRY] v={} os={} tier={}",
         record["precc_version"].as_str().unwrap_or("?"),
         record["os"].as_str().unwrap_or("?"),
         record["tier"].as_str().unwrap_or("?"),

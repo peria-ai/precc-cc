@@ -174,6 +174,129 @@ impl WasteReport {
     }
 }
 
+// ─── Compression feedback loop ─────────────────────────────────────────────
+
+/// TTL for compression failure records: skip compression for this many seconds
+/// after a command class fails post-compression.
+const COMPRESSION_COOLDOWN_SECS: u64 = 300; // 5 minutes
+
+/// Extract the command class (first 1-2 significant words) from a bash command.
+/// Used for fuzzy matching: if `cargo test` fails after compression,
+/// skip compression for all `cargo test` variants.
+pub fn command_class(command: &str) -> String {
+    let cmd = command.trim();
+    // Strip cd prefix
+    let effective = if let Some(pos) = cmd.find(" && ") {
+        if cmd.starts_with("cd ") {
+            cmd[pos + 4..].trim()
+        } else {
+            cmd
+        }
+    } else {
+        cmd
+    };
+
+    // Strip compression wrappers (rtk, lean-ctx)
+    let unwrapped = effective
+        .strip_prefix("rtk ")
+        .or_else(|| effective.strip_prefix("lean-ctx -c '"))
+        .unwrap_or(effective);
+
+    let words: Vec<&str> = unwrapped.split_whitespace().collect();
+    match words.len() {
+        0 => String::new(),
+        1 => words[0].to_string(),
+        _ => format!("{} {}", words[0], words[1]),
+    }
+}
+
+/// Record that a command class failed after compression.
+/// Written by PostToolUse when a Bash command has non-zero exit code.
+pub fn record_compression_failure(data_dir: &Path, cmd_class: &str) {
+    let log_path = data_dir.join("compression_failures.log");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let line = format!("{} {}\n", ts, cmd_class);
+
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
+/// Check if a command class recently failed after compression.
+/// Returns true if compression should be skipped (cooldown active).
+pub fn should_skip_compression(data_dir: &Path, cmd_class: &str) -> bool {
+    let log_path = data_dir.join("compression_failures.log");
+    let content = match std::fs::read_to_string(&log_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Scan from the end (most recent entries first)
+    for line in content.lines().rev() {
+        let mut parts = line.splitn(2, ' ');
+        let ts: u64 = match parts.next().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Stop scanning once we're past the cooldown window
+        if now.saturating_sub(ts) > COMPRESSION_COOLDOWN_SECS {
+            break;
+        }
+
+        let class = parts.next().unwrap_or("");
+        if class == cmd_class {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Detect if a Bash tool response indicates a failure (non-zero exit code).
+/// Claude Code's tool_response for Bash contains the exit code in the response.
+pub fn is_bash_failure(hook_input: &Value) -> bool {
+    // Check tool_response.exitCode or tool_response for error patterns
+    if let Some(resp) = hook_input.get("tool_response") {
+        // Direct exit code field
+        if let Some(code) = resp.get("exitCode").and_then(|v| v.as_i64()) {
+            return code != 0;
+        }
+        // String response containing "Exit code" (Claude Code format)
+        if let Some(s) = resp.as_str() {
+            if s.contains("Exit code") && !s.contains("Exit code 0") {
+                return true;
+            }
+        }
+        // Check for error field in response object
+        if let Some(err) = resp.get("error") {
+            if err.is_string() || (err.is_boolean() && err.as_bool() == Some(true)) {
+                return true;
+            }
+        }
+    }
+
+    // Check top-level is_error field
+    if let Some(is_err) = hook_input.get("tool_result_is_error") {
+        if is_err.as_bool() == Some(true) {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,5 +580,84 @@ mod tests {
             context_used_pct: Some(50),
         };
         assert!(!report.has_waste());
+    }
+
+    // =========================================================================
+    // Compression feedback loop
+    // =========================================================================
+
+    #[test]
+    fn command_class_simple() {
+        assert_eq!(command_class("cargo test"), "cargo test");
+        assert_eq!(command_class("git status"), "git status");
+        assert_eq!(command_class("ls"), "ls");
+    }
+
+    #[test]
+    fn command_class_strips_cd_prefix() {
+        assert_eq!(
+            command_class("cd /app && cargo test --release"),
+            "cargo test"
+        );
+    }
+
+    #[test]
+    fn command_class_strips_rtk_wrapper() {
+        assert_eq!(command_class("rtk cargo test"), "cargo test");
+    }
+
+    #[test]
+    fn command_class_strips_lean_ctx_wrapper() {
+        assert_eq!(command_class("lean-ctx -c 'cargo test'"), "cargo test'");
+    }
+
+    #[test]
+    fn compression_failure_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // No failures initially
+        assert!(!should_skip_compression(tmp.path(), "cargo test"));
+
+        // Record a failure
+        record_compression_failure(tmp.path(), "cargo test");
+
+        // Now it should skip
+        assert!(should_skip_compression(tmp.path(), "cargo test"));
+
+        // Different class should not be affected
+        assert!(!should_skip_compression(tmp.path(), "cargo build"));
+    }
+
+    #[test]
+    fn is_bash_failure_exit_code() {
+        let input = json!({"tool_response": {"exitCode": 1}});
+        assert!(is_bash_failure(&input));
+
+        let input = json!({"tool_response": {"exitCode": 0}});
+        assert!(!is_bash_failure(&input));
+    }
+
+    #[test]
+    fn is_bash_failure_string_response() {
+        let input = json!({"tool_response": "Exit code 1\nerror: could not compile"});
+        assert!(is_bash_failure(&input));
+
+        let input = json!({"tool_response": "Exit code 0\nSuccess"});
+        assert!(!is_bash_failure(&input));
+    }
+
+    #[test]
+    fn is_bash_failure_tool_result_is_error() {
+        let input = json!({"tool_result_is_error": true});
+        assert!(is_bash_failure(&input));
+
+        let input = json!({"tool_result_is_error": false});
+        assert!(!is_bash_failure(&input));
+    }
+
+    #[test]
+    fn is_bash_failure_no_error() {
+        let input = json!({"tool_response": "all good"});
+        assert!(!is_bash_failure(&input));
     }
 }

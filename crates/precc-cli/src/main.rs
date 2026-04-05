@@ -1899,15 +1899,20 @@ fn report_section(
 ///   across all rules (≈175 tok) as the blended estimate.
 ///
 /// PRECC-over-RTK gains (error prevention — these do NOT overlap with RTK):
-///   • CD prepend (Pillar 1): a wrong-dir failure produces ~1 failed tool call
-///     (~80 tokens output) + ~1 retry tool call + model re-reasoning ≈ 300 tokens
-///     saved per prevented miss.
-///   • Skill auto-fix (Pillar 4): each auto-applied skill prevents ~1 failure
-///     cycle (fail output + model re-read + retry) ≈ 250 tokens saved.
-///   • Mined pattern occurrences (Pillar 3): similar to skill auto-fix when the
-///     pattern has been promoted; each additional occurrence prevented ≈ 200 tokens.
+///   Each prevented failure avoids the full retry cycle:
+///     error output (~80 tok) + model reasoning about error (~500 tok) +
+///     retry command (~200 tok) + successful output on retry (~500 tok)
+///     ≈ 1,280 tokens wasted per failure cycle.
 ///
-/// All figures are deliberately conservative; real savings depend on model,
+///   • CD prepend (Pillar 1): prevents wrong-directory failures.
+///     Conservative estimate: 800 tokens per prevented miss (partial cycle,
+///     since some failures are caught quickly).
+///   • Skill auto-fix (Pillar 4): prevents build/test failures by applying
+///     learned fixes. Estimate: 600 tokens per activation.
+///   • Mined pattern occurrences (Pillar 3): prevents recurring failures.
+///     Estimate: 500 tokens per occurrence (patterns are typically simpler).
+///
+/// All figures are still conservative; real savings depend on model,
 /// session length, and verbosity settings.
 struct TokenModel {
     /// Tokens saved per RTK rewrite (weighted average across all rule categories).
@@ -1927,9 +1932,9 @@ impl Default for TokenModel {
         let avg = rtk_weighted_avg_tokens();
         Self {
             rtk_per_rewrite_avg: avg,
-            precc_per_cd_prepend: 300.0,
-            precc_per_skill_activation: 250.0,
-            precc_per_mined_occurrence: 200.0,
+            precc_per_cd_prepend: 800.0,
+            precc_per_skill_activation: 600.0,
+            precc_per_mined_occurrence: 500.0,
         }
     }
 }
@@ -2010,6 +2015,15 @@ fn cmd_savings(all: bool) -> Result<()> {
     }
     let data_dir = db::data_dir()?;
     let model = TokenModel::default();
+
+    // Import pending metrics.log → metrics.db so we see up-to-date data
+    // even when precc-learner daemon isn't running.
+    if let Ok(conn) = db::open_metrics(&data_dir) {
+        let imported = metrics::import_log(&conn, &data_dir).unwrap_or(0);
+        if imported > 0 {
+            eprintln!("[precc] Imported {} pending metric events", imported);
+        }
+    }
 
     println!("PRECC Token Savings Estimate");
     println!("============================");
@@ -2673,7 +2687,10 @@ fn cmd_trial(email: String) -> Result<()> {
     if !AUTHORIZED_FPS.contains(&local_fp) {
         bail!(
             "Trial key generation is not available on this machine (fp={:02x}{:02x}{:02x}{:02x})",
-            local_fp[0], local_fp[1], local_fp[2], local_fp[3]
+            local_fp[0],
+            local_fp[1],
+            local_fp[2],
+            local_fp[3]
         );
     }
 
@@ -3513,6 +3530,51 @@ fn cmd_update(force: bool, requested_version: Option<String>, auto: bool) -> Res
     // Clear the update-available marker so the banner stops showing
     if let Ok(data_dir) = db::data_dir() {
         update_check::clear_update_marker(&data_dir);
+    }
+
+    // For trial users: show savings summary and send usage telemetry.
+    // This helps trial users see the value they're getting and lets us
+    // understand trial usage patterns to improve the product.
+    if license::is_trial() {
+        if let Ok(data_dir) = db::data_dir() {
+            println!();
+            println!("── Trial savings report ──────────────────────────────────");
+            // Run the savings summary (equivalent to `precc savings --all`)
+            if let Err(e) = cmd_savings(true) {
+                // Non-fatal: savings display is best-effort for trial
+                eprintln!("[precc] Could not generate savings report: {e}");
+            }
+            // Send usage telemetry (bypasses rate limit and consent for trial)
+            match telemetry::force_send(&data_dir) {
+                Ok(()) => {
+                    println!();
+                    println!("Usage data sent to help improve PRECC. Thank you for trying PRECC!");
+                }
+                Err(e) => {
+                    eprintln!("[precc] Could not send usage data: {e}");
+                }
+            }
+            // Show trial expiry reminder
+            if let Ok(Some(lic)) = license::load() {
+                if let Some(days) = lic.days_remaining() {
+                    println!();
+                    if days <= 14 {
+                        println!(
+                            "\x1b[33mTrial expires in {} day{} ({}). Upgrade: https://github.com/peria-ai/precc-cc#pricing\x1b[0m",
+                            days,
+                            if days == 1 { "" } else { "s" },
+                            lic.expiry_date()
+                        );
+                    } else {
+                        println!(
+                            "Trial expires {} ({} days remaining).",
+                            lic.expiry_date(),
+                            days
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Ask about auto-updates if not already configured

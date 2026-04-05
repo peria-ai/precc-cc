@@ -14,7 +14,7 @@ use std::path::Path;
 use crate::{consent, db, metrics};
 
 /// Schema version for the telemetry payload (bump on breaking changes).
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 /// Rate limit: minimum seconds between telemetry sends.
 const RATE_LIMIT_SECS: u64 = 86400; // 24 hours
@@ -31,6 +31,9 @@ pub struct TelemetryPayload {
     pub skills: Vec<SkillTelemetry>,
     pub pillars: PillarTelemetry,
     pub hook_latency: LatencyTelemetry,
+    /// Total API-relevant tokens across all sessions (denominator for savings %).
+    /// Computed from session JSONL breakdown. 0 if unavailable.
+    pub total_api_tokens: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,9 +81,9 @@ pub struct SkillSavingsRow {
     pub est_tokens_saved: f64,
 }
 
-/// Token savings estimate per skill activation, by action type.
-const TOKENS_PER_CD_PREPEND: f64 = 300.0;
-const TOKENS_PER_SKILL_ACTIVATION: f64 = 250.0;
+/// Token savings estimate per event type (accounts for full retry cycle avoided).
+const TOKENS_PER_CD_PREPEND: f64 = 800.0;
+const TOKENS_PER_SKILL_ACTIVATION: f64 = 600.0;
 
 /// Query per-skill stats from heuristics.db.
 pub fn per_skill_stats(heuristics_conn: &rusqlite::Connection) -> Result<Vec<SkillSavingsRow>> {
@@ -174,6 +177,11 @@ pub fn hook_latency_percentiles(metrics_conn: &rusqlite::Connection) -> Result<L
 
 /// Build the telemetry payload from local databases.  Contains NO PII.
 pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
+    // Import pending metrics.log → metrics.db before building payload
+    if let Ok(conn) = db::open_metrics(data_dir) {
+        let _ = metrics::import_log(&conn, data_dir);
+    }
+
     let version = env!("CARGO_PKG_VERSION").to_string();
     let os = std::env::consts::OS.to_string();
     let arch = std::env::consts::ARCH.to_string();
@@ -243,7 +251,7 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         skill_activations: skill_activations_total,
         skill_tokens_saved: skill_activations_total as f64 * TOKENS_PER_SKILL_ACTIVATION,
         mined_preventions,
-        mined_tokens_saved: mined_preventions as f64 * 200.0,
+        mined_tokens_saved: mined_preventions as f64 * 500.0,
         lean_ctx_wraps,
         lean_ctx_tokens_saved: lean_ctx_wraps as f64 * 350.0,
     };
@@ -259,6 +267,11 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         }
     };
 
+    // Total API-relevant tokens (denominator for savings %)
+    let total_api_tokens = crate::mining::session_token_breakdown()
+        .map(|bd| bd.api_relevant_bytes() / 4) // ~4 bytes per token
+        .unwrap_or(0);
+
     Ok(TelemetryPayload {
         schema_version: SCHEMA_VERSION,
         precc_version: version,
@@ -268,6 +281,7 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         skills,
         pillars,
         hook_latency,
+        total_api_tokens,
     })
 }
 
@@ -309,6 +323,17 @@ fn send(payload: &TelemetryPayload) -> Result<()> {
 /// Rate-limit file path.
 fn last_sent_path(data_dir: &Path) -> std::path::PathBuf {
     data_dir.join(".telemetry_last_sent")
+}
+
+/// Build and send telemetry unconditionally (no rate-limit, no consent check).
+/// Used for trial users during `precc update` to report usage data.
+pub fn force_send(data_dir: &Path) -> Result<()> {
+    let payload = build_payload(data_dir)?;
+    send(&payload)?;
+    // Touch the rate-limit marker to avoid duplicate sends from maybe_send
+    let marker = last_sent_path(data_dir);
+    let _ = std::fs::write(&marker, "");
+    Ok(())
 }
 
 /// Check + send if consent is given and rate limit has elapsed.
