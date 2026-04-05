@@ -12,7 +12,7 @@
       "name": "precc",
       "description": "Predictive Error Correction for Claude Code — commands for init, ingest, skills, and reporting",
       "version": "1.0.0",
-      "source": "./plugins/precc",
+      "source": "./.claude-plugin/plugins/precc",
       "category": "productivity"
     }
   ]
