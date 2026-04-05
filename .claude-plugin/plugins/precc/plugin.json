@@ -32,46 +32,5 @@
       "bins": ["precc", "precc-hook", "precc-miner"]
     }
   ],
-  "commands": [
-    {
-      "name": "init",
-      "description": "Initialize PRECC databases and load built-in skills",
-      "source": "./commands/init.md"
-    },
-    {
-      "name": "ingest",
-      "description": "Mine Claude Code session logs for failure-fix patterns",
-      "source": "./commands/ingest.md"
-    },
-    {
-      "name": "skills",
-      "description": "List all PRECC automation skills and their activation stats",
-      "source": "./commands/skills.md"
-    },
-    {
-      "name": "report",
-      "description": "Show PRECC analytics report — hook latency, skill activations, failure patterns, and cost savings",
-      "source": "./commands/report.md"
-    },
-    {
-      "name": "savings",
-      "description": "Show PRECC unified savings report — all three pillars: command correction, semantic search, and context compression",
-      "source": "./commands/savings.md"
-    },
-    {
-      "name": "search",
-      "description": "AST-driven semantic code search via cocoindex-code — find code by meaning, not just text",
-      "source": "./commands/search.md"
-    },
-    {
-      "name": "compress",
-      "description": "Compress CLAUDE.md and context files to reduce token usage on every API call",
-      "source": "./commands/compress.md"
-    },
-    {
-      "name": "cluster",
-      "description": "Cluster installed skills by function, find overlaps, and recommend token-efficient replacements",
-      "source": "./commands/cluster.md"
-    }
-  ]
+  "commands": "./commands/"
 }
