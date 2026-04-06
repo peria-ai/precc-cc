@@ -60,6 +60,31 @@ Aktuální verze <span data-stat="current_version">--</span>:
 | Latence hooku | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Uživatelé | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metrika</th><th>Hodnota</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Ušetřené tokeny</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Poměr úspor</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Ušetřené tokeny</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Načítání...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Úspory podle verze
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Aktuální verze <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Načítání...</em></td></tr></tbody>
 </table>
 
-<small>Čísla jsou odhady. Každé předejité selhání se vyhne úplnému cyklu opakování: chybový výstup, uvažování modelu a příkaz opakování. Tato čísla se automaticky aktualizují z anonymizované telemetrie.</small>
+<small>Tato čísla se automaticky aktualizují z anonymizované telemetrie.</small>
 
 ## Odkazy
 

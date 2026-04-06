@@ -60,6 +60,31 @@ Claude永遠看不到錯誤。沒有token浪費。
 | 鉤子延遲 | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | 獨立用戶 | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>指標</th><th>值</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>節省的token</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>節省比率</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>節省的token</th></tr></thead>
+<tbody><tr><td colspan="4"><em>載入中...</em></td></tr></tbody>
+</table>
+</div>
+
 ### 各版本節省情況
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Claude永遠看不到錯誤。沒有token浪費。
 <tbody><tr><td colspan="5"><em>載入中...</em></td></tr></tbody>
 </table>
 
-<small>數字為估算值。每次預防的失敗避免了完整的重試循環：錯誤輸出、模型推理和重試命令。 這些數字會從匿名遙測數據自動更新。</small>
+<small>這些數字會從匿名遙測數據自動更新。</small>
 
 ## 鏈接
 

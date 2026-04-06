@@ -3643,6 +3643,10 @@ fn cmd_update(force: bool, requested_version: Option<String>, auto: bool) -> Res
                 Ok(()) => {
                     println!();
                     println!("Usage data sent to help improve PRECC. Thank you for trying PRECC!");
+                    println!();
+                    println!("PRECC now measures token savings by re-running original commands.");
+                    println!("After a day of normal Claude Code usage, run `precc savings` to see");
+                    println!("your actual measured savings with ground-truth data.");
                 }
                 Err(e) => {
                     eprintln!("[precc] Could not send usage data: {e}");

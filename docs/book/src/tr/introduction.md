@@ -60,6 +60,31 @@ Güncel sürüm <span data-stat="current_version">--</span>:
 | Hook gecikmesi | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Kullanıcılar | <span data-stat="unique_users">--</span> |
 
+### Ölçülen Tasarruf (Gerçek Veri)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metrik</th><th>Değer</th></tr></thead>
+<tbody>
+<tr><td>Orijinal çıkış tokenleri (PRECC olmadan)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Gerçek çıkış tokenleri (PRECC ile)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Tasarruf edilen tokenler</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Tasarruf oranı</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Gerçek ölçümler</td><td><span data-measured="ground_truth_count">--</span> ölçüm</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### Yeniden Yazma Türüne Göre
+
+<table id="rewrite-type-table">
+<thead><tr><th>Tür</th><th>Sayı</th><th>Ort. Tasarruf %</th><th>Tasarruf edilen tokenler</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Yükleniyor...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Sürüme göre tasarruf
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Güncel sürüm <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Yükleniyor...</em></td></tr></tbody>
 </table>
 
-<small>Rakamlar tahmindir. Her önlenen hata tam bir yeniden deneme döngüsünü önler: hata çıktısı, model akıl yürütmesi ve yeniden deneme komutu. Bu rakamlar anonimleştirilmiş telemetriden otomatik olarak güncellenir.</small>
+<small>Bu rakamlar anonimleştirilmiş telemetriden otomatik olarak güncellenir.</small>
 
 ## Bağlantılar
 

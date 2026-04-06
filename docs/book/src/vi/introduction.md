@@ -60,6 +60,31 @@ Phiên bản hiện tại <span data-stat="current_version">--</span>:
 | Độ trễ hook | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Người dùng | <span data-stat="unique_users">--</span> |
 
+### Tiết kiệm đo được (dữ liệu thực)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Chỉ số</th><th>Giá trị</th></tr></thead>
+<tbody>
+<tr><td>Token đầu ra gốc (không có PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Token đầu ra thực tế (có PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Token đã tiết kiệm</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Tỷ lệ tiết kiệm</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Đo lường thực tế</td><td><span data-measured="ground_truth_count">--</span> lần đo</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### Theo loại viết lại
+
+<table id="rewrite-type-table">
+<thead><tr><th>Loại</th><th>Số lần</th><th>TB tiết kiệm %</th><th>Token đã tiết kiệm</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Đang tải...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Tiết kiệm theo phiên bản
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Phiên bản hiện tại <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Đang tải...</em></td></tr></tbody>
 </table>
 
-<small>Các con số là ước tính. Mỗi lỗi được ngăn chặn tránh được một chu trình thử lại hoàn chỉnh: đầu ra lỗi, suy luận của mô hình và lệnh thử lại. Các con số này tự động cập nhật từ dữ liệu đo lường ẩn danh.</small>
+<small>Các con số này tự động cập nhật từ dữ liệu đo lường ẩn danh.</small>
 
 ## Liên kết
 

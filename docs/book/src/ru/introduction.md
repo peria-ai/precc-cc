@@ -60,6 +60,31 @@ Claude никогда не видит ошибку.
 | Задержка хука | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Пользователи | <span data-stat="unique_users">--</span> |
 
+### Измеренная экономия (реальные данные)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+<tbody>
+<tr><td>Исходные токены вывода (без PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Фактические токены вывода (с PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Сэкономлено токенов</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Коэффициент экономии</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Реальные измерения</td><td><span data-measured="ground_truth_count">--</span> измерений</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### По типу перезаписи
+
+<table id="rewrite-type-table">
+<thead><tr><th>Тип</th><th>Количество</th><th>Ср. экономия %</th><th>Сэкономлено токенов</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Загрузка...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Экономия по версиям
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Claude никогда не видит ошибку.
 <tbody><tr><td colspan="5"><em>Загрузка...</em></td></tr></tbody>
 </table>
 
-<small>Цифры являются оценками. Каждая предотвращённая ошибка избегает полного цикла повтора: вывод ошибки, рассуждение модели и команда повтора. Эти цифры обновляются автоматически из анонимизированной телеметрии.</small>
+<small>Эти цифры обновляются автоматически из анонимизированной телеметрии.</small>
 
 ## Ссылки
 

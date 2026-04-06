@@ -60,6 +60,31 @@ Versão atual <span data-stat="current_version">--</span>:
 | Hook latency | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Usuários | <span data-stat="unique_users">--</span> |
 
+### Economia medida (dados reais)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Tokens de saída originais (sem PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Tokens de saída reais (com PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Tokens saved</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Saving ratio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Medições reais</td><td><span data-measured="ground_truth_count">--</span> medições</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### Por tipo de reescrita
+
+<table id="rewrite-type-table">
+<thead><tr><th>Tipo</th><th>Contagem</th><th>% média</th><th>Tokens saved</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Carregando...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Economia por versão
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Versão atual <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Carregando...</em></td></tr></tbody>
 </table>
 
-<small>Os números são estimativas. Cada falha prevenida evita um ciclo completo de retry: saída de erro, raciocínio do modelo e comando de retry. These numbers update automatically from anonymized telemetry.</small>
+<small>These numbers update automatically from anonymized telemetry.</small>
 
 ## Links
 

@@ -147,6 +147,38 @@ lt_api = sum(r.get('total_api_tokens', 0) or 0 for r in latest)
 lt_hooks = sum((r.get('hook_latency') or {}).get('count', 0) or 0 for r in latest)
 lt_p50 = [((r.get('hook_latency') or {}).get('p50_ms', 0) or 0) for r in latest]
 
+# Aggregate measured data from latest version reports
+def get_measured(r):
+    return r.get('measured', {})
+
+lt_measured = [get_measured(r) for r in latest if get_measured(r)]
+measured_agg = {
+    'original_output_tokens': sum(m.get('original_output_tokens', 0) or 0 for m in lt_measured),
+    'actual_output_tokens': sum(m.get('actual_output_tokens', 0) or 0 for m in lt_measured),
+    'savings_tokens': sum(m.get('savings_tokens', 0) or 0 for m in lt_measured),
+    'ground_truth_count': sum(m.get('ground_truth_count', 0) or 0 for m in lt_measured),
+    'measurement_count': sum(m.get('measurement_count', 0) or 0 for m in lt_measured),
+}
+orig = measured_agg['original_output_tokens']
+measured_agg['savings_pct'] = round(measured_agg['savings_tokens'] / orig * 100, 1) if orig > 0 else 0
+
+# Aggregate per-rewrite-type across users
+rt_agg = {}
+for m in lt_measured:
+    for rt in m.get('by_rewrite_type', []):
+        name = rt.get('rewrite_type', 'unknown')
+        if name not in rt_agg:
+            rt_agg[name] = {'count': 0, 'total_savings': 0, 'pct_sum': 0}
+        rt_agg[name]['count'] += rt.get('count', 0)
+        rt_agg[name]['total_savings'] += rt.get('total_savings_tokens', 0)
+        rt_agg[name]['pct_sum'] += rt.get('avg_savings_pct', 0) * rt.get('count', 1)
+measured_agg['by_rewrite_type'] = [
+    {'rewrite_type': k, 'count': v['count'],
+     'avg_savings_pct': round(v['pct_sum'] / max(v['count'], 1), 1),
+     'total_savings_tokens': v['total_savings']}
+    for k, v in sorted(rt_agg.items(), key=lambda x: -x[1]['total_savings'])
+]
+
 out = {
     'current_version': latest_ver,
     'total_tokens_saved': int(lt_combined),
@@ -161,6 +193,7 @@ out = {
     'avg_latency_p50_ms': round(sum(lt_p50) / len(lt_p50), 2) if lt_p50 else 0,
     'unique_users': len(latest),
     'saving_pct': round(lt_combined / lt_api * 100, 1) if lt_api > 0 else 0,
+    'measured': measured_agg,
     'by_version': version_stats,
     'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
 }

@@ -14,7 +14,7 @@ use std::path::Path;
 use crate::{consent, db, metrics};
 
 /// Schema version for the telemetry payload (bump on breaking changes).
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 /// Rate limit: minimum seconds between telemetry sends.
 const RATE_LIMIT_SECS: u64 = 86400; // 24 hours
@@ -34,11 +34,38 @@ pub struct TelemetryPayload {
     /// Total API-relevant tokens across all sessions (denominator for savings %).
     /// Computed from session JSONL breakdown. 0 if unavailable.
     pub total_api_tokens: u64,
-    /// Estimated tokens saved by RTK/lean-ctx output compression.
-    /// Computed from Bash output size × RTK rewrite rate × compression ratio.
+    /// Measured tokens saved (ground truth from re-running original commands).
     pub compression_tokens_saved: u64,
-    /// Combined savings: pillars + compression.
+    /// Combined savings: pillars + measured compression.
     pub combined_tokens_saved: u64,
+    /// Ground-truth measurement details.
+    pub measured: MeasuredTelemetry,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct MeasuredTelemetry {
+    /// Total original output tokens (what would have been without PRECC).
+    pub original_output_tokens: u64,
+    /// Total actual output tokens (with PRECC compression).
+    pub actual_output_tokens: u64,
+    /// Total tokens saved by compression (original - actual).
+    pub savings_tokens: u64,
+    /// Savings percentage (savings / original × 100).
+    pub savings_pct: f64,
+    /// Number of ground-truth measurements taken.
+    pub ground_truth_count: u64,
+    /// Total measurements (including skipped unsafe commands).
+    pub measurement_count: u64,
+    /// Per-rewrite-type breakdown.
+    pub by_rewrite_type: Vec<RewriteTypeTelemetry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RewriteTypeTelemetry {
+    pub rewrite_type: String,
+    pub count: u64,
+    pub avg_savings_pct: f64,
+    pub total_savings_tokens: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -292,15 +319,41 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         data_dir,
     );
 
-    let measured = if let Ok(conn) = db::open_metrics(data_dir) {
+    let measured_savings = if let Ok(conn) = db::open_metrics(data_dir) {
         metrics::total_measured_savings(&conn).unwrap_or_default()
     } else {
         metrics::MeasuredSavings::default()
     };
 
     // Use measured savings (ground truth) instead of estimates
-    let compression_tokens_saved = measured.savings_total;
+    let compression_tokens_saved = measured_savings.savings_total;
     let combined_tokens_saved = compression_tokens_saved;
+
+    // Per-rewrite-type breakdown from measured data
+    let by_rewrite_type = if let Ok(conn) = db::open_metrics(data_dir) {
+        metrics::savings_by_rewrite_type(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|rt| RewriteTypeTelemetry {
+                rewrite_type: rt.rewrite_type,
+                count: rt.count,
+                avg_savings_pct: rt.avg_savings_pct,
+                total_savings_tokens: rt.total_savings_tokens,
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let measured_telemetry = MeasuredTelemetry {
+        original_output_tokens: measured_savings.original_total,
+        actual_output_tokens: measured_savings.actual_total,
+        savings_tokens: measured_savings.savings_total,
+        savings_pct: measured_savings.savings_pct,
+        ground_truth_count: measured_savings.ground_truth_count,
+        measurement_count: measured_savings.measurement_count,
+        by_rewrite_type,
+    };
 
     Ok(TelemetryPayload {
         schema_version: SCHEMA_VERSION,
@@ -314,6 +367,7 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         total_api_tokens,
         compression_tokens_saved,
         combined_tokens_saved,
+        measured: measured_telemetry,
     })
 }
 

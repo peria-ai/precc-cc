@@ -60,6 +60,31 @@ Claude永远看不到错误。没有token浪费。
 | 钩子延迟 | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | 独立用户 | <span data-stat="unique_users">--</span> |
 
+### 实测节省（实际数据）
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>指标</th><th>值</th></tr></thead>
+<tbody>
+<tr><td>原始输出token（无PRECC）</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>实际输出token（有PRECC）</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>节省的token</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>节省比率</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>实测数据</td><td><span data-measured="ground_truth_count">--</span> 次测量</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### 按重写类型
+
+<table id="rewrite-type-table">
+<thead><tr><th>类型</th><th>次数</th><th>平均节省%</th><th>节省的token</th></tr></thead>
+<tbody><tr><td colspan="4"><em>加载中...</em></td></tr></tbody>
+</table>
+</div>
+
 ### 各版本节省情况
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Claude永远看不到错误。没有token浪费。
 <tbody><tr><td colspan="5"><em>加载中...</em></td></tr></tbody>
 </table>
 
-<small>数字为估算值。每次预防的失败避免了完整的重试循环：错误输出、模型推理和重试命令。 这些数字会从匿名遥测数据自动更新。</small>
+<small>这些数字会从匿名遥测数据自动更新。</small>
 
 ## 链接
 

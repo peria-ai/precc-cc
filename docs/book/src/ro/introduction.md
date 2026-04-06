@@ -60,6 +60,31 @@ Versiunea curentă <span data-stat="current_version">--</span>:
 | Latență hook | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Utilizatori | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metrică</th><th>Valoare</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Tokeni economisiți</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Raport economii</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Tokeni economisiți</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Se încarcă...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Economii pe versiune
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Versiunea curentă <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Se încarcă...</em></td></tr></tbody>
 </table>
 
-<small>Cifrele sunt estimări. Fiecare eșec prevenit evită un ciclu complet de reîncercare: ieșire eroare, raționament model și comandă de reîncercare. Aceste numere se actualizează automat din telemetria anonimizată.</small>
+<small>Aceste numere se actualizează automat din telemetria anonimizată.</small>
 
 ## Linkuri
 

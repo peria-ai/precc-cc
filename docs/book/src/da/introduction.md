@@ -60,6 +60,31 @@ Nuværende version <span data-stat="current_version">--</span>:
 | Hook-latens | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Brugere | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metrik</th><th>Værdi</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Tokens sparet</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Besparelsesforhold</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Tokens sparet</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Indlæser...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Besparelser per version
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Nuværende version <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Indlæser...</em></td></tr></tbody>
 </table>
 
-<small>Tal er estimater. Hver forhindret fejl undgår en fuld genforsøgscyklus: fejloutput, modelræsonnement og genforsøgskommando. Disse tal opdateres automatisk fra anonymiseret telemetri.</small>
+<small>Disse tal opdateres automatisk fra anonymiseret telemetri.</small>
 
 ## Links
 

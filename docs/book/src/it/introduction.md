@@ -60,6 +60,31 @@ Versione attuale <span data-stat="current_version">--</span>:
 | Latenza hook | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Utenti | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metrica</th><th>Valore</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Token risparmiati</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Rapporto di risparmio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Token risparmiati</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Caricamento...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Risparmi per versione
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Versione attuale <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Caricamento...</em></td></tr></tbody>
 </table>
 
-<small>Le cifre sono stime. Ogni fallimento prevenuto evita un ciclo completo di retry: output dell'errore, ragionamento del modello e comando di retry. Questi numeri si aggiornano automaticamente dalla telemetria anonimizzata.</small>
+<small>Questi numeri si aggiornano automaticamente dalla telemetria anonimizzata.</small>
 
 ## Link
 

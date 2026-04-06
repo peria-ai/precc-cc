@@ -60,6 +60,31 @@ Claude는 오류를 보지 못합니다. 토큰 낭비 없음.
 | 훅 지연 | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | 고유 사용자 | <span data-stat="unique_users">--</span> |
 
+### 실측 절약 (실제 데이터)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>지표</th><th>값</th></tr></thead>
+<tbody>
+<tr><td>원본 출력 토큰 (PRECC 없이)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>실제 출력 토큰 (PRECC 포함)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>절약된 토큰</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>절약 비율</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>실측 데이터</td><td><span data-measured="ground_truth_count">--</span> 회 측정</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### 재작성 유형별
+
+<table id="rewrite-type-table">
+<thead><tr><th>유형</th><th>횟수</th><th>평균 절약 %</th><th>절약된 토큰</th></tr></thead>
+<tbody><tr><td colspan="4"><em>로딩 중...</em></td></tr></tbody>
+</table>
+</div>
+
 ### 릴리스별 절약
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Claude는 오류를 보지 못합니다. 토큰 낭비 없음.
 <tbody><tr><td colspan="5"><em>로딩 중...</em></td></tr></tbody>
 </table>
 
-<small>수치는 추정치입니다. 예방된 각 실패는 전체 재시도 사이클을 회피합니다: 오류 출력, 모델 추론, 재시도 명령. 이 수치는 익명화된 원격 측정에서 자동으로 업데이트됩니다.</small>
+<small>이 수치는 익명화된 원격 측정에서 자동으로 업데이트됩니다.</small>
 
 ## 링크
 

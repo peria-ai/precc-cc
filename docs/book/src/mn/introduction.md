@@ -60,6 +60,31 @@ Current version <span data-stat="current_version">--</span>:
 | Hook хоцролт | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Unique users | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Хэмжүүр</th><th>Утга</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Хэмнэсэн токен</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Хэмнэлтийн харьцаа</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Хэмнэсэн токен</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Loading...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Savings by Release
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Current version <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Loading...</em></td></tr></tbody>
 </table>
 
-<small>Тоонууд тооцоолол юм. Урьдчилан сэргийлсэн алдаа бүр бүрэн дахин оролдлогын мөчлөгөөс зайлсхийдэг. Эдгээр тоонууд нэргүй телеметрээс автоматаар шинэчлэгддэг.</small>
+<small>Эдгээр тоонууд нэргүй телеметрээс автоматаар шинэчлэгддэг.</small>
 
 ## Холбоосууд
 

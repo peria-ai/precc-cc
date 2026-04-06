@@ -60,6 +60,31 @@ Claude هرگز خطا را نمی‌بیند.
 | تأخیر هوک | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | کاربران | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>معیار</th><th>مقدار</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>توکن‌های صرفه‌جویی شده</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>نسبت صرفه‌جویی</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>توکن‌های صرفه‌جویی شده</th></tr></thead>
+<tbody><tr><td colspan="4"><em>در حال بارگذاری...</em></td></tr></tbody>
+</table>
+</div>
+
 ### صرفه‌جویی بر اساس نسخه
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Claude هرگز خطا را نمی‌بیند.
 <tbody><tr><td colspan="5"><em>در حال بارگذاری...</em></td></tr></tbody>
 </table>
 
-<small>اعداد تخمینی هستند. هر شکست جلوگیری شده یک چرخه کامل تلاش مجدد را اجتناب می‌کند: خروجی خطا، استدلال مدل و دستور تلاش مجدد. این اعداد به طور خودکار از داده‌های اندازه‌گیری ناشناس به‌روز می‌شوند.</small>
+<small>این اعداد به طور خودکار از داده‌های اندازه‌گیری ناشناس به‌روز می‌شوند.</small>
 
 ## پیوندها
 

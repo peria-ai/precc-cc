@@ -60,6 +60,31 @@ Aktualna wersja <span data-stat="current_version">--</span>:
 | Opóźnienie hooka | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Użytkownicy | <span data-stat="unique_users">--</span> |
 
+### Measured Savings (Ground Truth)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metryka</th><th>Wartość</th></tr></thead>
+<tbody>
+<tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Zaoszczędzone tokeny</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Współczynnik oszczędności</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### By Rewrite Type
+
+<table id="rewrite-type-table">
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Zaoszczędzone tokeny</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Ładowanie...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Oszczędności wg wersji
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Aktualna wersja <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Ładowanie...</em></td></tr></tbody>
 </table>
 
-<small>Wartości są szacunkowe. Każdy zapobieżony błąd unika pełnego cyklu ponawiania: wyjście błędu, rozumowanie modelu i polecenie ponowienia. Te liczby aktualizują się automatycznie z zanonimizowanej telemetrii.</small>
+<small>Te liczby aktualizują się automatycznie z zanonimizowanej telemetrii.</small>
 
 ## Linki
 

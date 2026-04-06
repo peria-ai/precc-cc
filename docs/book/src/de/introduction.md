@@ -60,6 +60,31 @@ Aktuelle Version <span data-stat="current_version">--</span>:
 | Hook-Latenz | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Nutzer | <span data-stat="unique_users">--</span> |
 
+### Gemessene Einsparungen (Realdaten)
+
+<div id="measured-savings" style="display:none">
+<table id="measured-summary">
+<thead><tr><th>Metrik</th><th>Wert</th></tr></thead>
+<tbody>
+<tr><td>Original-Ausgabetokens (ohne PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
+<tr><td>Tatsächliche Ausgabetokens (mit PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
+<tr><td>Gesparte Token</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Sparquote</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Realmessungen</td><td><span data-measured="ground_truth_count">--</span> Messungen</td></tr>
+</tbody>
+</table>
+</div>
+
+<div id="rewrite-type-breakdown" style="display:none">
+
+#### Nach Rewrite-Typ
+
+<table id="rewrite-type-table">
+<thead><tr><th>Typ</th><th>Anzahl</th><th>Ø Einsparung %</th><th>Gesparte Token</th></tr></thead>
+<tbody><tr><td colspan="4"><em>Laden...</em></td></tr></tbody>
+</table>
+</div>
+
 ### Einsparungen pro Version
 
 <table id="version-breakdown" style="display:none">
@@ -67,7 +92,7 @@ Aktuelle Version <span data-stat="current_version">--</span>:
 <tbody><tr><td colspan="5"><em>Laden...</em></td></tr></tbody>
 </table>
 
-<small>Die Zahlen sind Schätzungen. Jeder verhinderte Fehler vermeidet einen vollständigen Wiederholungszyklus: Fehlerausgabe, Modell-Reasoning und Wiederholungsbefehl. Diese Zahlen werden automatisch aus anonymisierter Telemetrie aktualisiert.</small>
+<small>Diese Zahlen werden automatisch aus anonymisierter Telemetrie aktualisiert.</small>
 
 ## Links
 
