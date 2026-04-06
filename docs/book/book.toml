@@ -1,0 +1,15 @@
+[book]
+title = "PRECC User Guide"
+authors = ["Peria AI"]
+language = "en"
+src = "src/en"
+
+[build]
+build-dir = "../../target/book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/peria-ai/precc-cc"
+site-url = "/"
+additional-js = ["src/live-stats.js"]

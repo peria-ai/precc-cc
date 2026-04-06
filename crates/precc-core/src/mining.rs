@@ -243,10 +243,28 @@ impl SessionTokenBreakdown {
 /// - Assistant text (reasoning)
 /// - User text
 pub fn session_token_breakdown() -> Result<SessionTokenBreakdown> {
+    session_token_breakdown_since(None)
+}
+
+/// Compute token breakdown, optionally filtering to sessions modified after `since`.
+/// When `since` is Some(timestamp), only files with mtime >= timestamp are counted.
+/// This ensures the denominator (API tokens) matches the numerator (savings) period.
+pub fn session_token_breakdown_since(
+    since: Option<std::time::SystemTime>,
+) -> Result<SessionTokenBreakdown> {
     let files = find_session_files()?;
     let mut breakdown = SessionTokenBreakdown::default();
 
     for path in &files {
+        if let Some(since_ts) = since {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if let Ok(mtime) = meta.modified() {
+                    if mtime < since_ts {
+                        continue; // Skip files older than the baseline
+                    }
+                }
+            }
+        }
         if let Ok(meta) = std::fs::metadata(&path) {
             breakdown.total_raw_bytes += meta.len();
         }

@@ -88,6 +88,34 @@ pub fn summary(conn: &Connection, metric_type: MetricType) -> Result<Option<Metr
     }
 }
 
+/// Get the earliest metric timestamp from metrics.db.
+/// Returns None if no metrics exist. Used to establish the baseline for
+/// savings percentage: only count API tokens from sessions after this point.
+pub fn earliest_timestamp(conn: &Connection) -> Result<Option<std::time::SystemTime>> {
+    let ts: Option<String> = conn
+        .query_row("SELECT MIN(timestamp) FROM metrics", [], |r| r.get(0))
+        .unwrap_or(None);
+
+    if let Some(ts_str) = ts {
+        // Parse SQLite datetime format "YYYY-MM-DD HH:MM:SS"
+        // Convert to SystemTime via seconds since epoch
+        let secs: u64 = conn
+            .query_row(
+                "SELECT strftime('%s', MIN(timestamp)) FROM metrics",
+                [],
+                |r| r.get::<_, i64>(0).map(|s| s as u64),
+            )
+            .unwrap_or(0);
+        if secs > 0 {
+            return Ok(Some(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            ));
+        }
+        let _ = ts_str; // suppress unused warning
+    }
+    Ok(None)
+}
+
 /// Import pending metrics from `metrics.log` into `metrics.db`.
 ///
 /// The hook writes to `metrics.log` (O_APPEND, no DB overhead) and the learner
@@ -143,6 +171,133 @@ pub fn import_log(conn: &Connection, data_dir: &std::path::Path) -> Result<usize
 
     let _ = std::fs::remove_file(&processing_path);
     Ok(count)
+}
+
+// ─── Savings measurements import + queries ─────────────────────────────────
+
+/// Import pending savings measurements from JSONL log into metrics.db.
+pub fn import_savings_log(conn: &Connection, data_dir: &std::path::Path) -> Result<usize> {
+    let log_path = data_dir.join("savings_measurements.jsonl");
+    if !log_path.exists() {
+        return Ok(0);
+    }
+
+    let processing_path = data_dir.join("savings_measurements.jsonl.processing");
+    if std::fs::rename(&log_path, &processing_path).is_err() {
+        return Ok(0);
+    }
+
+    let content = match std::fs::read_to_string(&processing_path) {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = std::fs::remove_file(&processing_path);
+            return Ok(0);
+        }
+    };
+
+    let mut count = 0;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let _ = conn.execute(
+            "INSERT INTO savings_measurements (timestamp, cmd_class, rewrite_type, original_output_tokens, actual_output_tokens, savings_tokens, savings_pct, measurement_method)
+             VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                v.get("cmd_class").and_then(|s| s.as_str()).unwrap_or(""),
+                v.get("rewrite_type").and_then(|s| s.as_str()).unwrap_or(""),
+                v.get("original_output_tokens").and_then(|n| n.as_i64()).unwrap_or(0),
+                v.get("actual_output_tokens").and_then(|n| n.as_i64()).unwrap_or(0),
+                v.get("savings_tokens").and_then(|n| n.as_i64()).unwrap_or(0),
+                v.get("savings_pct").and_then(|n| n.as_f64()).unwrap_or(0.0),
+                v.get("measurement_method").and_then(|s| s.as_str()).unwrap_or(""),
+            ],
+        );
+        count += 1;
+    }
+
+    let _ = std::fs::remove_file(&processing_path);
+    Ok(count)
+}
+
+/// Measured savings totals from the savings_measurements table.
+#[derive(Debug, Default)]
+pub struct MeasuredSavings {
+    pub original_total: u64,
+    pub actual_total: u64,
+    pub savings_total: u64,
+    pub savings_pct: f64,
+    pub measurement_count: u64,
+    pub ground_truth_count: u64,
+}
+
+/// Query total measured savings from metrics.db.
+pub fn total_measured_savings(conn: &Connection) -> Result<MeasuredSavings> {
+    let result = conn.query_row(
+        "SELECT COALESCE(SUM(original_output_tokens), 0),
+                COALESCE(SUM(actual_output_tokens), 0),
+                COALESCE(SUM(savings_tokens), 0),
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN measurement_method = 'ground_truth' THEN 1 ELSE 0 END), 0)
+         FROM savings_measurements",
+        [],
+        |r| {
+            let orig: i64 = r.get(0)?;
+            let actual: i64 = r.get(1)?;
+            let savings: i64 = r.get(2)?;
+            let count: i64 = r.get(3)?;
+            let gt_count: i64 = r.get(4)?;
+            Ok(MeasuredSavings {
+                original_total: orig as u64,
+                actual_total: actual as u64,
+                savings_total: savings as u64,
+                savings_pct: if orig > 0 {
+                    savings as f64 / orig as f64 * 100.0
+                } else {
+                    0.0
+                },
+                measurement_count: count as u64,
+                ground_truth_count: gt_count as u64,
+            })
+        },
+    )?;
+    Ok(result)
+}
+
+/// Per-rewrite-type savings breakdown.
+#[derive(Debug)]
+pub struct RewriteTypeSavings {
+    pub rewrite_type: String,
+    pub count: u64,
+    pub avg_savings_pct: f64,
+    pub total_savings_tokens: u64,
+}
+
+/// Query savings grouped by rewrite type.
+pub fn savings_by_rewrite_type(conn: &Connection) -> Result<Vec<RewriteTypeSavings>> {
+    let mut stmt = conn.prepare(
+        "SELECT rewrite_type, COUNT(*), AVG(savings_pct), SUM(savings_tokens)
+         FROM savings_measurements
+         GROUP BY rewrite_type
+         ORDER BY SUM(savings_tokens) DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(RewriteTypeSavings {
+                rewrite_type: r.get(0)?,
+                count: r.get::<_, i64>(1)? as u64,
+                avg_savings_pct: r.get(2)?,
+                total_savings_tokens: r.get::<_, i64>(3)? as u64,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
 }
 
 #[cfg(test)]

@@ -34,6 +34,11 @@ pub struct TelemetryPayload {
     /// Total API-relevant tokens across all sessions (denominator for savings %).
     /// Computed from session JSONL breakdown. 0 if unavailable.
     pub total_api_tokens: u64,
+    /// Estimated tokens saved by RTK/lean-ctx output compression.
+    /// Computed from Bash output size × RTK rewrite rate × compression ratio.
+    pub compression_tokens_saved: u64,
+    /// Combined savings: pillars + compression.
+    pub combined_tokens_saved: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -267,10 +272,35 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         }
     };
 
-    // Total API-relevant tokens (denominator for savings %)
-    let total_api_tokens = crate::mining::session_token_breakdown()
-        .map(|bd| bd.api_relevant_bytes() / 4) // ~4 bytes per token
-        .unwrap_or(0);
+    // Total API-relevant tokens (denominator for savings %).
+    // Only count sessions from after the first metric was recorded — this ensures
+    // the denominator matches the period where savings were actually tracked.
+    let metrics_since = if let Ok(conn) = db::open_metrics(data_dir) {
+        metrics::earliest_timestamp(&conn).ok().flatten()
+    } else {
+        None
+    };
+    let bd = crate::mining::session_token_breakdown_since(metrics_since).ok();
+    let total_api_tokens = bd.as_ref().map(|b| b.api_relevant_bytes() / 4).unwrap_or(0);
+
+    // Import pending savings measurements and use real measured data
+    let _ = metrics::import_savings_log(
+        &db::open_metrics(data_dir).unwrap_or_else(|_| {
+            // Fallback: create in-memory DB if metrics.db can't be opened
+            rusqlite::Connection::open_in_memory().unwrap()
+        }),
+        data_dir,
+    );
+
+    let measured = if let Ok(conn) = db::open_metrics(data_dir) {
+        metrics::total_measured_savings(&conn).unwrap_or_default()
+    } else {
+        metrics::MeasuredSavings::default()
+    };
+
+    // Use measured savings (ground truth) instead of estimates
+    let compression_tokens_saved = measured.savings_total;
+    let combined_tokens_saved = compression_tokens_saved;
 
     Ok(TelemetryPayload {
         schema_version: SCHEMA_VERSION,
@@ -282,6 +312,8 @@ pub fn build_payload(data_dir: &Path) -> Result<TelemetryPayload> {
         pillars,
         hook_latency,
         total_api_tokens,
+        compression_tokens_saved,
+        combined_tokens_saved,
     })
 }
 

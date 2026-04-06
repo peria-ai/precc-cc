@@ -2016,12 +2016,16 @@ fn cmd_savings(all: bool) -> Result<()> {
     let data_dir = db::data_dir()?;
     let model = TokenModel::default();
 
-    // Import pending metrics.log → metrics.db so we see up-to-date data
+    // Import pending logs → metrics.db so we see up-to-date data
     // even when precc-learner daemon isn't running.
     if let Ok(conn) = db::open_metrics(&data_dir) {
         let imported = metrics::import_log(&conn, &data_dir).unwrap_or(0);
         if imported > 0 {
             eprintln!("[precc] Imported {} pending metric events", imported);
+        }
+        let savings_imported = metrics::import_savings_log(&conn, &data_dir).unwrap_or(0);
+        if savings_imported > 0 {
+            eprintln!("[precc] Imported {} savings measurements", savings_imported);
         }
     }
 
@@ -2196,7 +2200,14 @@ fn cmd_savings(all: bool) -> Result<()> {
     };
 
     // ---- Token breakdown by tool type (from session log content) -----------
-    let breakdown = mining::session_token_breakdown().ok();
+    // Only count sessions from after the first metric was recorded, so the
+    // savings ratio is honest (denominator matches the measurement period).
+    let metrics_since = if let Ok(conn) = db::open_metrics(&data_dir) {
+        metrics::earliest_timestamp(&conn).ok().flatten()
+    } else {
+        None
+    };
+    let breakdown = mining::session_token_breakdown_since(metrics_since).ok();
 
     println!("Summary");
     println!("-------");
@@ -2208,44 +2219,127 @@ fn cmd_savings(all: bool) -> Result<()> {
     }
     println!();
 
+    // ---- Measured savings (ground truth) --------------------------------
+    if let Ok(conn) = db::open_metrics(&data_dir) {
+        let measured = metrics::total_measured_savings(&conn).unwrap_or_default();
+        if measured.measurement_count > 0 {
+            println!("Measured Savings (ground truth)");
+            println!("------------------------------");
+            println!("  Original output tokens  : {:>8}", measured.original_total);
+            println!("  Actual output tokens    : {:>8}", measured.actual_total);
+            println!("  Tokens saved            : {:>8}", measured.savings_total);
+            println!("  Savings ratio           : {:>7.1}%", measured.savings_pct);
+            println!(
+                "  Measurements            : {:>8} ({} ground truth)",
+                measured.measurement_count, measured.ground_truth_count
+            );
+            println!();
+
+            if all {
+                let by_type = metrics::savings_by_rewrite_type(&conn).unwrap_or_default();
+                if !by_type.is_empty() {
+                    println!("  Per rewrite type:");
+                    for rt in &by_type {
+                        println!(
+                            "    {:<25} : {:>5} measurements, {:>5.1}% avg, {:>8} tokens saved",
+                            rt.rewrite_type, rt.count, rt.avg_savings_pct, rt.total_savings_tokens
+                        );
+                    }
+                    println!();
+                }
+            }
+        }
+    }
+
     if !all {
         println!("Run `precc savings --all` for full per-tool and per-skill breakdown (Pro).");
         println!();
-        println!("Note: figures are estimates based on conservative medians per event.");
+        println!("Note: estimated figures use conservative medians per event.");
+        println!("      Measured figures (above) are from actual command re-runs.");
         return Ok(());
     }
 
     if let Some(ref bd) = breakdown {
         let bash = bd.tool("Bash");
+        let bash_output_tokens = bash.output_bytes as f64 / 4.0;
         let bash_total = (bash.input_bytes + bash.output_bytes) as f64 / 4.0;
         let api_tokens = bd.api_relevant_bytes() as f64 / 4.0;
 
-        let bash_saving_ratio = if bash_total > 0.0 {
-            grand_total / bash_total * 100.0
+        // Estimate output compression savings from RTK/lean-ctx.
+        // RTK-wrapped commands produce compressed output (60-90% smaller).
+        // The Bash output we see is already compressed. To estimate what it
+        // would have been without compression, we use the RTK rewrite rate.
+        // Conservative estimate: 65% of output from RTK-wrapped commands is
+        // savings (i.e., uncompressed would be ~2.86x larger).
+        let rtk_rate = if bash.invocations > 0 {
+            rtk_rewrite_count as f64 / bash.invocations as f64
         } else {
             0.0
         };
+        // Output from RTK-wrapped commands (proportional estimate)
+        let rtk_output_tokens = bash_output_tokens * rtk_rate;
+        // Conservative 65% compression ratio: compressed = 35% of original
+        // So savings = compressed_output / 0.35 * 0.65 = compressed × 1.857
+        let compression_savings = rtk_output_tokens * 1.857;
+
+        let total_with_compression = grand_total + compression_savings;
+
         let api_saving_ratio = if api_tokens > 0.0 {
-            grand_total / api_tokens * 100.0
+            total_with_compression / api_tokens * 100.0
         } else {
             0.0
         };
+
+        println!("Output Compression (RTK/lean-ctx)");
+        println!("---------------------------------");
+        println!(
+            "  Bash output tokens (compressed) : {:>8.0}",
+            bash_output_tokens
+        );
+        println!(
+            "  RTK-wrapped commands            : {:>8} / {} ({:.0}%)",
+            rtk_rewrite_count,
+            bash.invocations,
+            rtk_rate * 100.0
+        );
+        println!(
+            "  Est. compression savings        : {:>8.0} tokens",
+            compression_savings
+        );
+        println!();
+
+        println!("Combined Savings (all sources)");
+        println!("------------------------------");
+        println!(
+            "  Error prevention (PRECC)        : {:>10.0} tokens",
+            grand_total
+        );
+        println!(
+            "  Output compression (RTK)        : {:>10.0} tokens",
+            compression_savings
+        );
+        println!(
+            "  Combined total                  : {:>10.0} tokens",
+            total_with_compression
+        );
+        println!();
 
         println!("Saving Ratio (API-relevant tokens only)");
         println!("---------------------------------------");
         if api_tokens > 0.0 {
             println!("  API-relevant tokens             : {:>10.0}", api_tokens);
-            println!("  Tokens saved                    : {:>10.0}", grand_total);
+            println!(
+                "  Combined savings                : {:>10.0}",
+                total_with_compression
+            );
             println!(
                 "  vs all API content              : {:>9.1}%",
                 api_saving_ratio
             );
         }
         if bash_total > 0.0 {
-            println!(
-                "  vs Bash tool spend              : {:>9.1}%",
-                bash_saving_ratio
-            );
+            let bash_ratio = total_with_compression / bash_total * 100.0;
+            println!("  vs Bash tool spend              : {:>9.1}%", bash_ratio);
         }
         println!();
 

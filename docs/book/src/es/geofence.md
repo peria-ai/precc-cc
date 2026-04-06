@@ -1,0 +1,69 @@
+# Geocerca
+
+PRECC incluye verificación de cumplimiento de geocerca IP para entornos regulados. Esta es una función Pro.
+
+## Descripción general
+
+Algunas organizaciones requieren que las herramientas de desarrollo solo operen dentro de regiones geográficas aprobadas. La función de geocerca de PRECC verifica que la dirección IP de la máquina actual esté dentro de una lista de regiones permitidas.
+
+## Verificación de cumplimiento
+
+```bash
+$ precc geofence check
+[precc] Current IP: 203.0.113.42
+[precc] Region: US-East (Virginia)
+[precc] Status: COMPLIANT
+[precc] Policy: us-east-1, us-west-2, eu-west-1
+```
+
+Si la máquina está fuera de las regiones permitidas:
+
+```bash
+$ precc geofence check
+[precc] Current IP: 198.51.100.7
+[precc] Region: AP-Southeast (Singapore)
+[precc] Status: NON-COMPLIANT
+[precc] Policy: us-east-1, us-west-2, eu-west-1
+[precc] Warning: Current region is not in the allowed list.
+```
+
+## Actualización de datos de geocerca
+
+```bash
+$ precc geofence refresh
+[precc] Fetching updated IP geolocation data...
+[precc] Updated. Cache expires in 24h.
+```
+
+## Ver información de geocerca
+
+```bash
+$ precc geofence info
+Geofence Configuration
+======================
+Policy file:    ~/.config/precc/geofence.toml
+Allowed regions: us-east-1, us-west-2, eu-west-1
+Cache age:      2h 14m
+Last check:     2026-04-03 09:12:00 UTC
+Status:         COMPLIANT
+```
+
+## Borrar caché
+
+```bash
+$ precc geofence clear
+[precc] Geofence cache cleared.
+```
+
+## Configuración
+
+La política de geocerca se define en `~/.config/precc/geofence.toml`:
+
+```toml
+[geofence]
+allowed_regions = ["us-east-1", "us-west-2", "eu-west-1"]
+check_on_init = true
+block_on_violation = false
+```
+
+Establezca `block_on_violation = true` para evitar que PRECC opere cuando esté fuera de las regiones permitidas.

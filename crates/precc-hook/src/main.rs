@@ -408,6 +408,30 @@ fn run_bash_pipeline(
         }
     }
 
+    // Write measurement stash so PostToolUse can find the original command
+    // and measure ground-truth savings by re-running it.
+    if pipeline.modified() && !dry_run_enabled() {
+        if let Ok(data_dir) = db::data_dir() {
+            let rewritten_hash = {
+                let mut hasher = DefaultHasher::new();
+                "Bash".hash(&mut hasher);
+                let ti_str = serde_json::json!({"command": &pipeline.command}).to_string();
+                ti_str.hash(&mut hasher);
+                hasher.finish()
+            };
+            let cmd_class = post_observe::command_class(&pipeline.original);
+            post_observe::write_stash(
+                &data_dir,
+                rewritten_hash,
+                &pipeline.original,
+                &pipeline.command,
+                &pipeline.cwd,
+                &cmd_class,
+                &pipeline.reasons,
+            );
+        }
+    }
+
     // Record metrics (after stdout emit — never delays response to Claude)
     let latency_ms = t_start.elapsed().as_secs_f64() * 1000.0;
     append_metrics_log_bash(&pipeline, latency_ms);
@@ -650,7 +674,23 @@ fn run_post_observe(
     // Check for large output
     let is_large = post_observe::is_large_output(estimated_tokens);
 
-    // Log the observation
+    // Determine if this Bash command was compressed (RTK/lean-ctx/diet wrapped)
+    let command = tool_input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let cmd_class = if tool_name == "Bash" {
+        post_observe::command_class(command)
+    } else {
+        String::new()
+    };
+    let was_compressed = tool_name == "Bash"
+        && (command.starts_with("rtk ")
+            || command.contains("| rtk ")
+            || command.starts_with("lean-ctx ")
+            || command.contains("lean-ctx -c"));
+
+    // Log the observation with compression tag
     post_observe::append_observation(
         &data_dir,
         session_id,
@@ -658,16 +698,13 @@ fn run_post_observe(
         cmd_hash,
         output_bytes,
         estimated_tokens,
+        was_compressed,
+        &cmd_class,
     );
 
     // Compression feedback: if a Bash command failed, record its class so
     // PreToolUse can skip compression on the next similar command (adaptive expand).
     if tool_name == "Bash" && post_observe::is_bash_failure(hook_input) {
-        let command = tool_input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let cmd_class = post_observe::command_class(command);
         if !cmd_class.is_empty() {
             post_observe::record_compression_failure(&data_dir, &cmd_class);
         }
@@ -694,6 +731,59 @@ fn run_post_observe(
             }
         });
         println!("{}", serde_json::to_string(&output)?);
+    }
+
+    // ── Ground-truth savings measurement ──────────────────────────────────
+    // For Bash commands that PRECC modified: look up the stash to find the
+    // original command, re-run it if safe, and measure the real output size
+    // difference between original (uncompressed) and actual (compressed).
+    if tool_name == "Bash" {
+        let rewritten_hash = post_observe::hash_command(tool_name, tool_input);
+        if let Some(stash) = post_observe::read_stash(&data_dir, rewritten_hash) {
+            let measure_start = std::time::Instant::now();
+
+            let (original_tokens, method) = if post_observe::is_safe_to_rerun(&stash.original_cmd) {
+                // Ground truth: run the original command and measure output
+                match std::process::Command::new("bash")
+                    .args(["-c", &stash.original_cmd])
+                    .current_dir(&stash.cwd)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                {
+                    Ok(output) => {
+                        let total_bytes = output.stdout.len() as u64 + output.stderr.len() as u64;
+                        (total_bytes / 4, "ground_truth")
+                    }
+                    Err(_) => (estimated_tokens, "measurement_failed"),
+                }
+            } else {
+                // Unsafe to re-run — skip measurement, don't claim savings
+                (estimated_tokens, "unsafe_skip")
+            };
+
+            let measure_ms = measure_start.elapsed().as_secs_f64() * 1000.0;
+            let rewrite_type = stash
+                .rewrite_types
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("unknown");
+
+            // Only log if we got a real measurement (ground_truth)
+            if method == "ground_truth" {
+                post_observe::append_savings_measurement(
+                    &data_dir,
+                    &stash.cmd_class,
+                    rewrite_type,
+                    original_tokens,
+                    estimated_tokens,
+                    method,
+                    measure_ms,
+                );
+            }
+
+            post_observe::delete_stash(&data_dir, rewritten_hash);
+        }
     }
 
     // Append metrics
