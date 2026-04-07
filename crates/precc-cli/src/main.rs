@@ -3421,7 +3421,7 @@ fn cmd_analyze(action: AnalyzeAction) -> Result<()> {
 }
 
 fn cmd_analyze_frequencies(top: usize, gaps_only: bool, tsv: bool) -> Result<()> {
-    use precc_core::{nushell, rtk};
+    use precc_core::{diet, nushell, rtk};
     use std::collections::HashMap;
 
     // Find all session JSONL files
@@ -3506,17 +3506,18 @@ fn cmd_analyze_frequencies(top: usize, gaps_only: bool, tsv: bool) -> Result<()>
     let mut sorted: Vec<(String, u64)> = counts.into_iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    // Apply gaps filter
-    let filtered: Vec<(String, u64, bool, bool)> = sorted
+    // Apply gaps filter — a class is "covered" if any of nushell/rtk/diet has a rule
+    let filtered: Vec<(String, u64, bool, bool, bool)> = sorted
         .iter()
         .map(|(cls, n)| {
             let has_nu = nushell::has_rule(cls);
             let has_rtk = rtk::has_rule(cls);
-            (cls.clone(), *n, has_nu, has_rtk)
+            let has_diet = diet::has_rule(cls);
+            (cls.clone(), *n, has_nu, has_rtk, has_diet)
         })
-        .filter(|(_, _, has_nu, has_rtk)| {
+        .filter(|(_, _, has_nu, has_rtk, has_diet)| {
             if gaps_only {
-                !has_nu && !has_rtk
+                !has_nu && !has_rtk && !has_diet
             } else {
                 true
             }
@@ -3525,9 +3526,9 @@ fn cmd_analyze_frequencies(top: usize, gaps_only: bool, tsv: bool) -> Result<()>
         .collect();
 
     if tsv {
-        println!("count\tcmd_class\tnushell\trtk");
-        for (cls, n, has_nu, has_rtk) in &filtered {
-            println!("{}\t{}\t{}\t{}", n, cls, has_nu, has_rtk);
+        println!("count\tcmd_class\tnushell\trtk\tdiet");
+        for (cls, n, has_nu, has_rtk, has_diet) in &filtered {
+            println!("{}\t{}\t{}\t{}\t{}", n, cls, has_nu, has_rtk, has_diet);
         }
     } else {
         println!("PRECC Command Frequency Analysis");
@@ -3538,35 +3539,38 @@ fn cmd_analyze_frequencies(top: usize, gaps_only: bool, tsv: bool) -> Result<()>
         println!("Distinct classes   : {}", sorted.len());
         if gaps_only {
             println!(
-                "Gaps in top {}    : {} (no nushell or rtk rule)",
+                "Gaps in top {}    : {} (no nushell, rtk, or diet rule)",
                 top,
                 filtered.len()
             );
         }
         println!();
         println!(
-            "{:>6}  {:<40}  {:>7}  {:>7}",
-            "COUNT", "COMMAND CLASS", "NUSHELL", "RTK"
+            "{:>6}  {:<40}  {:>5}  {:>4}  {:>5}",
+            "COUNT", "COMMAND CLASS", "NU", "RTK", "DIET"
         );
         println!("{}", "-".repeat(70));
-        for (cls, n, has_nu, has_rtk) in &filtered {
+        for (cls, n, has_nu, has_rtk, has_diet) in &filtered {
             let nu_mark = if *has_nu { "✓" } else { " " };
             let rtk_mark = if *has_rtk { "✓" } else { " " };
+            let diet_mark = if *has_diet { "✓" } else { " " };
             let display_cls = if cls.len() > 40 {
                 format!("{}…", &cls[..39])
             } else {
                 cls.clone()
             };
             println!(
-                "{:>6}  {:<40}  {:>7}  {:>7}",
-                n, display_cls, nu_mark, rtk_mark
+                "{:>6}  {:<40}  {:>5}  {:>4}  {:>5}",
+                n, display_cls, nu_mark, rtk_mark, diet_mark
             );
         }
         println!();
         if !gaps_only {
             let gap_count = sorted
                 .iter()
-                .filter(|(c, _)| !nushell::has_rule(c) && !rtk::has_rule(c))
+                .filter(|(c, _)| {
+                    !nushell::has_rule(c) && !rtk::has_rule(c) && !diet::has_rule(c)
+                })
                 .count();
             println!(
                 "Use `precc analyze frequencies --gaps` to see only uncovered command classes ({} total).",

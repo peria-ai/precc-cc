@@ -135,12 +135,67 @@ static RULES: &[DietRule] = &[
         },
         est_tokens_saved: 150,
     },
+    // ── ssh: enable transport compression (-C) when missing ─────────────
+    // SSH commands run remote shells whose output we can't structurally
+    // compress, but -C cuts wire bytes and tail caps absolute size.
+    // Only fires when there's a remote command (e.g. `ssh host 'cmd'`),
+    // not for interactive logins.
+    DietRule {
+        prefixes: &["ssh "],
+        skip_if: &["|", ">", "&&", "||", ";", " -C ", " -C\t", "-C "],
+        transform: DietTransform::AddFlag {
+            flag: "-C",
+            already: " -C",
+        },
+        est_tokens_saved: 150,
+    },
+    // ── kubectl logs: tail by default to avoid full log dumps ───────────
+    DietRule {
+        prefixes: &["kubectl logs"],
+        skip_if: &["|", ">", "&&", "||", ";", "--tail", "-f"],
+        transform: DietTransform::AddFlag {
+            flag: "--tail=100",
+            already: "--tail",
+        },
+        est_tokens_saved: 500,
+    },
+    // ── journalctl: cap output by default ───────────────────────────────
+    DietRule {
+        prefixes: &["journalctl"],
+        skip_if: &["|", ">", "&&", "||", ";", "-n ", "--lines"],
+        transform: DietTransform::AddFlag {
+            flag: "-n 50 --no-pager",
+            already: "--no-pager",
+        },
+        est_tokens_saved: 400,
+    },
 ];
 
 /// Apply diet rules to a command.
 ///
 /// Returns `Some((rewritten_command, est_tokens_saved))` if a rule matched,
 /// `None` otherwise.
+/// Returns true if a diet rule exists for this command, regardless of
+/// whether diet_enabled() is true. Used by `precc analyze` to identify gaps.
+pub fn has_rule(command: &str) -> bool {
+    let cmd = command.trim();
+    if cmd.is_empty() {
+        return false;
+    }
+    if crate::lean_ctx::is_tool_command(cmd) {
+        return false;
+    }
+    if cmd.contains("<<") {
+        return false;
+    }
+    for rule in RULES {
+        if rule.prefixes.iter().any(|p| cmd.starts_with(p)) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn apply(command: &str) -> Option<(String, u32)> {
     if !diet_enabled() {
         return None;

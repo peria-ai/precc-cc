@@ -518,6 +518,12 @@ const COMPRESSION_COOLDOWN_SECS: u64 = 300; // 5 minutes
 /// Extract the command class (first 1-2 significant words) from a bash command.
 /// Used for fuzzy matching: if `cargo test` fails after compression,
 /// skip compression for all `cargo test` variants.
+///
+/// Strips:
+/// - `cd /path && ` prefix
+/// - Compression wrappers (rtk, lean-ctx)
+/// - Leading env assignments (FOO=bar BAZ=qux cmd → cmd)
+/// - `sudo`, `nohup`, `time` prefixes
 pub fn command_class(command: &str) -> String {
     let cmd = command.trim();
     // Strip cd prefix
@@ -537,7 +543,29 @@ pub fn command_class(command: &str) -> String {
         .or_else(|| effective.strip_prefix("lean-ctx -c '"))
         .unwrap_or(effective);
 
-    let words: Vec<&str> = unwrapped.split_whitespace().collect();
+    // Strip leading env assignments and noise prefixes (sudo, nohup, time)
+    let mut words: Vec<&str> = unwrapped.split_whitespace().collect();
+    while !words.is_empty() {
+        let w = words[0];
+        // Env assignment: VAR=value (unquoted, no spaces)
+        let is_env = w
+            .find('=')
+            .map(|i| {
+                let var = &w[..i];
+                !var.is_empty()
+                    && var
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            })
+            .unwrap_or(false);
+        let is_noise = matches!(w, "sudo" | "nohup" | "time" | "exec");
+        if is_env || is_noise {
+            words.remove(0);
+        } else {
+            break;
+        }
+    }
+
     match words.len() {
         0 => String::new(),
         1 => words[0].to_string(),
@@ -944,6 +972,30 @@ mod tests {
     #[test]
     fn command_class_strips_lean_ctx_wrapper() {
         assert_eq!(command_class("lean-ctx -c 'cargo test'"), "cargo test'");
+    }
+
+    #[test]
+    fn command_class_strips_env_assignments() {
+        assert_eq!(command_class("RUST_BACKTRACE=1 cargo test"), "cargo test");
+        assert_eq!(
+            command_class("RUST_LOG=debug RUST_BACKTRACE=full cargo run"),
+            "cargo run"
+        );
+        assert_eq!(command_class("DEBUG=1 npm test"), "npm test");
+    }
+
+    #[test]
+    fn command_class_strips_sudo_nohup_time() {
+        assert_eq!(command_class("sudo cp /tmp/a /tmp/b"), "cp /tmp/a");
+        assert_eq!(command_class("nohup ./server &"), "./server &");
+        assert_eq!(command_class("time cargo build"), "cargo build");
+    }
+
+    #[test]
+    fn command_class_does_not_strip_lowercase_assignments() {
+        // Lowercase var=val isn't a shell env assignment (they must be uppercase
+        // by convention; this avoids false positives like `name=value cmd`)
+        assert_eq!(command_class("foo=bar baz"), "foo=bar baz");
     }
 
     #[test]

@@ -1078,11 +1078,13 @@ impl Pipeline {
         self.stage_bash_unwrap();
         self.validate_mutation(&before, "bash-unwrap");
 
-        // Stage 2: Skill matching (Pillar 4) — read-only, skip if no DB
+        // Stage 2: Skill matching (Pillar 4) — read-only, skip if no DB.
+        // Skills are deliberate, vetted rewrites (e.g. block-comment-cmd
+        // intentionally replaces `# foo` with `true`). The mutation validator
+        // would reject these as "unbounded" so we don't run it for skills —
+        // skills are authoritative.
         if !destructive {
-            let before = self.command.clone();
             self.stage_skills();
-            self.validate_mutation(&before, "skills");
         }
 
         // Stage 3: Context resolution (Pillar 1)
