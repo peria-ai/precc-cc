@@ -250,36 +250,80 @@ pub fn is_safe_to_rerun(command: &str) -> bool {
     // Handle && and ; chains: every clause must be individually safe.
     // `cd /path` clauses are allowed (they're stateful but produce no output
     // and don't modify anything destructively).
-    let has_and = cmd_norm.contains(" && ");
-    let has_semi = cmd_norm.contains("; ");
-    if has_and || has_semi {
-        // Split on whichever separator(s) exist
-        let parts: Vec<&str> = if has_and && !has_semi {
-            cmd_norm.split(" && ").collect()
-        } else if !has_and && has_semi {
-            cmd_norm.split("; ").collect()
-        } else {
-            // Mixed: split on both
-            cmd_norm
-                .split(" && ")
-                .flat_map(|s| s.split("; "))
-                .collect()
-        };
-        return parts.iter().map(|c| c.trim()).all(|clause| {
-            if clause.starts_with("cd ") {
+    // Quote-aware chain split: top-level && / ; / || (outside quotes).
+    // For || we still require all branches to be safe (either could execute).
+    let parts = split_top_level_chain(&cmd_norm);
+    if parts.len() > 1 {
+        return parts.iter().all(|clause| {
+            let c = clause.trim();
+            if c.starts_with("cd ") {
                 return true;
             }
-            is_clause_safe(clause)
+            is_clause_safe(c)
         });
     }
 
-    // Reject other command separators
-    if cmd_norm.contains(" || ") || cmd_norm.contains(" | tee ") {
+    // Reject `| tee` (writes to file via pipe)
+    if cmd_norm.contains(" | tee ") {
         return false;
     }
 
     is_clause_safe(&cmd_norm)
 }
+
+/// Split a command on top-level `&&`, `||`, or `;` separators (outside quotes).
+/// Returns a single-element vec if no top-level separators are found.
+fn split_top_level_chain(cmd: &str) -> Vec<String> {
+    let bytes = cmd.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    let mut in_squote = false;
+    let mut in_dquote = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\'' && !in_dquote {
+            in_squote = !in_squote;
+            i += 1;
+            continue;
+        }
+        if c == b'"' && !in_squote {
+            in_dquote = !in_dquote;
+            i += 1;
+            continue;
+        }
+        if !in_squote && !in_dquote {
+            // Look for " && " or " || " or "; " separators
+            if i + 4 <= bytes.len() && &bytes[i..i + 4] == b" && " {
+                parts.push(cmd[start..i].to_string());
+                start = i + 4;
+                i = start;
+                continue;
+            }
+            if i + 4 <= bytes.len() && &bytes[i..i + 4] == b" || " {
+                parts.push(cmd[start..i].to_string());
+                start = i + 4;
+                i = start;
+                continue;
+            }
+            if i + 2 <= bytes.len() && &bytes[i..i + 2] == b"; " {
+                parts.push(cmd[start..i].to_string());
+                start = i + 2;
+                i = start;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if start < bytes.len() {
+        parts.push(cmd[start..].to_string());
+    }
+    if parts.is_empty() {
+        parts.push(cmd.to_string());
+    }
+    parts
+}
+
 
 /// Returns a version of the command that is safe to re-run for measurement —
 /// strips output redirects so we don't clobber files. Returns None if the
@@ -385,6 +429,15 @@ fn is_clause_safe(clause: &str) -> bool {
         "readlink", "mkfifo", "mktemp",
         // Archive read-only listings (NO extract — those are below)
         "zcat", "bzcat", "xzcat",
+        // Binary/object inspection (read-only)
+        "nm", "ldd", "readelf", "objdump", "strings", "addr2line", "c++filt", "size",
+        "ld.so", "vdpa", "ftrace",
+        // Mail server config inspection (read-only)
+        "postconf", "doveconf", "doveadm", "dovecot",
+        // Hardware/accelerator inspection
+        "npu-smi", "nvidia-smi", "rocm-smi", "intel_gpu_top", "lshw", "lstopo",
+        // Stateful no-output (treat as safe — measurement returns empty, harmless)
+        "source", "export", "set", "unset", "alias", "unalias",
     ];
     if safe_single.contains(&first) {
         return true;
