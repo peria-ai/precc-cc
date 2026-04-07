@@ -247,23 +247,34 @@ pub fn is_safe_to_rerun(command: &str) -> bool {
     // dropping the redirect during the re-run measurement.)
     let cmd_norm = strip_output_redirect(cmd);
 
-    // Handle && chains: every clause must be individually safe.
+    // Handle && and ; chains: every clause must be individually safe.
     // `cd /path` clauses are allowed (they're stateful but produce no output
     // and don't modify anything destructively).
-    if cmd_norm.contains(" && ") {
-        return cmd_norm
-            .split(" && ")
-            .map(|c| c.trim())
-            .all(|clause| {
-                if clause.starts_with("cd ") {
-                    return true; // cd is a no-op for measurement
-                }
-                is_clause_safe(clause)
-            });
+    let has_and = cmd_norm.contains(" && ");
+    let has_semi = cmd_norm.contains("; ");
+    if has_and || has_semi {
+        // Split on whichever separator(s) exist
+        let parts: Vec<&str> = if has_and && !has_semi {
+            cmd_norm.split(" && ").collect()
+        } else if !has_and && has_semi {
+            cmd_norm.split("; ").collect()
+        } else {
+            // Mixed: split on both
+            cmd_norm
+                .split(" && ")
+                .flat_map(|s| s.split("; "))
+                .collect()
+        };
+        return parts.iter().map(|c| c.trim()).all(|clause| {
+            if clause.starts_with("cd ") {
+                return true;
+            }
+            is_clause_safe(clause)
+        });
     }
 
     // Reject other command separators
-    if cmd_norm.contains(" || ") || cmd_norm.contains("; ") || cmd_norm.contains(" | tee ") {
+    if cmd_norm.contains(" || ") || cmd_norm.contains(" | tee ") {
         return false;
     }
 
@@ -512,9 +523,47 @@ fn is_clause_safe(clause: &str) -> bool {
             }
             return true;
         }
+
+        // ssh host '<inner_cmd>' — safe if the inner command is safe.
+        // Common form: ssh [opts] host "cmd1; cmd2" or ssh host 'cmd'
+        if first == "ssh" {
+            // Find the first non-option, non-host argument — that's the inner cmd.
+            // Heuristic: scan for the first quoted string (single or double).
+            // We need the FULL command text, not just words[], so use the
+            // original `clause` string.
+            if let Some(inner) = extract_ssh_inner_command(clause) {
+                return is_safe_to_rerun(inner.trim());
+            }
+            // No inner command (interactive ssh) — not measurable
+            return false;
+        }
     }
 
     false
+}
+
+/// Extract the inner command from `ssh [opts] host '<cmd>'` or `ssh ... "<cmd>"`.
+/// Returns None if no quoted command is present.
+fn extract_ssh_inner_command(cmd: &str) -> Option<String> {
+    // Find the first single or double quote
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            let quote = bytes[i];
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != quote {
+                j += 1;
+            }
+            if j < bytes.len() {
+                return Some(cmd[start..j].to_string());
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
 }
 
 // ─── Savings measurement logging ───────────────────────────────────────────
