@@ -238,36 +238,117 @@ pub fn cleanup_stale_stashes(data_dir: &Path) {
 /// Only allows known read-only commands that produce no side effects.
 pub fn is_safe_to_rerun(command: &str) -> bool {
     let cmd = command.trim();
-
-    // Reject commands with output redirection or destructive operators
-    if cmd.contains(" > ") || cmd.contains(" >> ") || cmd.contains(" | tee ") {
+    if cmd.is_empty() {
         return false;
     }
 
-    // Strip cd prefix to get the effective command
-    let effective = if let Some(pos) = cmd.find(" && ") {
-        if cmd.starts_with("cd ") {
-            cmd[pos + 4..].trim()
-        } else {
-            return false; // Chained commands — not safe unless cd prefix
+    // Strip output redirection — for measurement we run without writing.
+    // (`>`, `>>`, `| tee` would alter the filesystem, which we can avoid by
+    // dropping the redirect during the re-run measurement.)
+    let cmd_norm = strip_output_redirect(cmd);
+
+    // Handle && chains: every clause must be individually safe.
+    // `cd /path` clauses are allowed (they're stateful but produce no output
+    // and don't modify anything destructively).
+    if cmd_norm.contains(" && ") {
+        return cmd_norm
+            .split(" && ")
+            .map(|c| c.trim())
+            .all(|clause| {
+                if clause.starts_with("cd ") {
+                    return true; // cd is a no-op for measurement
+                }
+                is_clause_safe(clause)
+            });
+    }
+
+    // Reject other command separators
+    if cmd_norm.contains(" || ") || cmd_norm.contains("; ") || cmd_norm.contains(" | tee ") {
+        return false;
+    }
+
+    is_clause_safe(&cmd_norm)
+}
+
+/// Returns a version of the command that is safe to re-run for measurement —
+/// strips output redirects so we don't clobber files. Returns None if the
+/// command is not measurable at all.
+pub fn rerunnable_form(command: &str) -> Option<String> {
+    if !is_safe_to_rerun(command) {
+        return None;
+    }
+    Some(strip_output_redirect(command))
+}
+
+/// Strip the trailing redirect (`> file`, `>> file`) from a command for
+/// measurement purposes. Returns the command without the redirect.
+fn strip_output_redirect(cmd: &str) -> String {
+    // Walk backwards: find the last `> file` or `>> file` not inside quotes.
+    // This is a simplified parser that handles the common cases.
+    if let Some(idx) = cmd.rfind(" >> ") {
+        return cmd[..idx].trim().to_string();
+    }
+    if let Some(idx) = cmd.rfind(" > ") {
+        // Don't strip 2>&1 redirects (those go to stdout, not files)
+        if !cmd[idx..].starts_with(" > &") {
+            return cmd[..idx].trim().to_string();
         }
+    }
+    cmd.to_string()
+}
+
+/// Check if a single clause (no `&&` chains) is safe to re-run.
+fn is_clause_safe(clause: &str) -> bool {
+    let cmd = clause.trim();
+
+    // Handle cd /path && remainder (the && was already stripped at chain level
+    // but a single clause might still start with cd)
+    let effective = if cmd.starts_with("cd ") {
+        // Strip cd /path; the remainder must be safe on its own
+        // But if there's no &&, this clause is just `cd /path` which is stateful
+        return false;
     } else {
         cmd
     };
 
-    // Strip compression wrappers
-    let unwrapped = effective
-        .strip_prefix("rtk ")
-        .or_else(|| {
-            if effective.starts_with("lean-ctx -c '") && effective.ends_with('\'') {
-                Some(&effective[13..effective.len() - 1])
-            } else {
-                None
-            }
-        })
-        .unwrap_or(effective);
+    // Strip env assignments and noise prefixes (FOO=bar, sudo, nohup, time)
+    let mut words: Vec<&str> = effective.split_whitespace().collect();
+    while !words.is_empty() {
+        let w = words[0];
+        let is_env = w
+            .find('=')
+            .map(|i| {
+                let var = &w[..i];
+                !var.is_empty()
+                    && var
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            })
+            .unwrap_or(false);
+        let is_noise = matches!(w, "sudo" | "time" | "exec");
+        // nohup is only noise for the safety check; it doesn't make a cmd unsafe
+        let is_nohup = w == "nohup";
+        if is_env || is_noise || is_nohup {
+            words.remove(0);
+        } else {
+            break;
+        }
+    }
 
-    let words: Vec<&str> = unwrapped.split_whitespace().collect();
+    // Strip compression wrappers
+    if !words.is_empty() && words[0] == "rtk" {
+        words.remove(0);
+    }
+    if words.len() >= 2 && words[0] == "lean-ctx" && words[1] == "-c" {
+        // lean-ctx -c '<inner>' — the inner is the actual command
+        // Skip the wrapper and check the inner cmd
+        words.drain(0..2);
+        // The inner is wrapped in quotes; remove them
+        if let Some(inner) = words.first().map(|w| w.trim_matches(|c| c == '\'' || c == '"')) {
+            return is_clause_safe(inner);
+        }
+    }
+
     if words.is_empty() {
         return false;
     }
@@ -276,9 +357,23 @@ pub fn is_safe_to_rerun(command: &str) -> bool {
 
     // Single-word safe commands
     let safe_single = [
+        // Core file/text utilities
         "ls", "cat", "head", "tail", "find", "grep", "rg", "awk", "wc", "du", "df", "file", "stat",
         "tree", "which", "type", "echo", "printf", "date", "uname", "env", "printenv", "whoami",
-        "pwd", "hostname", "id", "uptime",
+        "pwd", "hostname", "id", "uptime", "free", "users", "groups", "history", "alias",
+        // Networking read-only
+        "ping", "host", "dig", "nslookup", "traceroute", "ip", "ifconfig", "ss", "netstat", "arp",
+        // Disk read-only
+        "lsblk", "blkid", "lsof", "fuser",
+        // System info
+        "lscpu", "lspci", "lsusb", "dmidecode",
+        // Process inspection
+        "ps", "pstree", "pgrep",
+        // Misc safe
+        "cmp", "comm", "diff", "md5sum", "sha256sum", "shasum", "basename", "dirname", "realpath",
+        "readlink", "mkfifo", "mktemp",
+        // Archive read-only listings (NO extract — those are below)
+        "zcat", "bzcat", "xzcat",
     ];
     if safe_single.contains(&first) {
         return true;
@@ -302,20 +397,120 @@ pub fn is_safe_to_rerun(command: &str) -> bool {
                     "rev-parse",
                     "ls-files",
                     "ls-tree",
+                    "blame",
+                    "config",
+                    "shortlog",
+                    "reflog",
+                    "cat-file",
+                    "merge-base",
+                    "rev-list",
                 ],
             ),
-            ("cargo", &["check", "clippy", "test", "metadata", "tree"]),
-            ("npm", &["list", "ls", "outdated", "view"]),
-            ("pip", &["list", "show", "freeze"]),
-            ("python", &["--version", "-c"]),
-            ("node", &["--version", "-e"]),
-            ("rustc", &["--version", "--print"]),
-            ("go", &["version", "list", "env"]),
+            (
+                "cargo",
+                &[
+                    "check",
+                    "clippy",
+                    "test",
+                    "metadata",
+                    "tree",
+                    "build", // Idempotent (Cargo caches outputs)
+                    "doc",
+                    "bench",
+                    "search",
+                    "outdated",
+                    "audit",
+                    "version",
+                    "--version",
+                ],
+            ),
+            (
+                "npm",
+                &[
+                    "list", "ls", "outdated", "view", "info", "audit", "search", "config", "doctor",
+                    "ping", "version",
+                ],
+            ),
+            (
+                "pip",
+                &["list", "show", "freeze", "search", "check", "config", "--version"],
+            ),
+            ("python", &["--version", "-V", "-c", "-m"]),
+            ("python3", &["--version", "-V", "-c", "-m"]),
+            ("node", &["--version", "-v", "-e", "--help"]),
+            ("rustc", &["--version", "--print", "-V", "--explain"]),
+            (
+                "go",
+                &[
+                    "version", "list", "env", "doc", "vet", "test", "fmt", "tool", "mod",
+                ],
+            ),
+            ("docker", &["ps", "images", "logs", "inspect", "version", "info", "stats", "history"]),
+            ("kubectl", &["get", "describe", "logs", "version", "config", "explain", "api-resources"]),
+            ("brew", &["list", "info", "search", "outdated", "doctor", "config"]),
+            ("apt", &["list", "show", "search", "policy"]),
+            ("apt-cache", &["search", "show", "depends", "rdepends"]),
+            ("gem", &["list", "info", "search", "which", "environment"]),
+            ("composer", &["show", "info", "outdated", "depends"]),
+            ("mvn", &["dependency:tree", "help:effective-pom", "--version"]),
+            ("gradle", &["dependencies", "tasks", "projects", "--version"]),
+            ("gh", &["api", "auth", "browse", "config", "issue", "pr", "release", "repo", "run", "search", "status", "version"]),
+            ("aws", &["help", "configure", "sts"]),
+            ("systemctl", &["status", "list-units", "list-unit-files", "list-timers", "show", "cat", "is-active", "is-enabled", "is-failed"]),
+            ("journalctl", &["--list-boots", "--disk-usage", "--version"]),
+            ("clawhub", &["inspect", "list", "search", "show", "version"]),
+            ("stripe", &["config", "version", "--help"]),
+            ("precc", &["savings", "skills", "report", "license", "telemetry", "analyze", "--version"]),
         ];
         for (cmd_prefix, safe_subcommands) in safe_pairs {
             if first == *cmd_prefix && safe_subcommands.contains(&second) {
                 return true;
             }
+        }
+
+        // Special cases requiring flag inspection:
+
+        // sed: -n is read-only; -i is in-place edit (destructive)
+        if first == "sed" {
+            if words.iter().any(|w| w.starts_with("-i") || *w == "--in-place") {
+                return false;
+            }
+            return true;
+        }
+
+        // cargo fmt: only safe with --check (default mode rewrites files)
+        if first == "cargo" && second == "fmt" {
+            return words.iter().any(|w| *w == "--check" || *w == "-q");
+        }
+
+        // sqlite3: only safe for SELECT-only queries
+        if first == "sqlite3" {
+            // If a query is specified, check it's SELECT/PRAGMA only
+            for w in &words[1..] {
+                let upper = w.to_uppercase();
+                if upper.contains("INSERT")
+                    || upper.contains("UPDATE")
+                    || upper.contains("DELETE")
+                    || upper.contains("DROP")
+                    || upper.contains("CREATE")
+                    || upper.contains("ALTER")
+                    || upper.contains("REPLACE")
+                {
+                    return false;
+                }
+            }
+            // No write keywords found — assume safe (could be opening DB in read mode)
+            return true;
+        }
+
+        // curl/wget: GET requests are safe; POST/PUT/DELETE are not
+        if first == "curl" || first == "wget" {
+            for w in &words[1..] {
+                if matches!(*w, "-X" | "--request" | "-d" | "--data" | "-F" | "--form" | "-T" | "--upload-file") {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -1089,15 +1284,84 @@ mod tests {
     }
 
     #[test]
-    fn is_safe_to_rerun_rejects_redirects() {
-        assert!(!is_safe_to_rerun("ls > output.txt"));
-        assert!(!is_safe_to_rerun("echo hi >> log.txt"));
+    fn is_safe_to_rerun_strips_redirects() {
+        // The base command (`ls`, `echo`) is safe — redirects are stripped
+        // for the measurement re-run via rerunnable_form().
+        assert!(is_safe_to_rerun("ls > output.txt"));
+        assert!(is_safe_to_rerun("echo hi >> log.txt"));
+    }
+
+    #[test]
+    fn rerunnable_form_strips_redirects() {
+        assert_eq!(
+            rerunnable_form("ls -la > /tmp/out.txt"),
+            Some("ls -la".to_string())
+        );
+        assert_eq!(
+            rerunnable_form("git log >> history.log"),
+            Some("git log".to_string())
+        );
+    }
+
+    #[test]
+    fn rerunnable_form_unsafe_returns_none() {
+        assert_eq!(rerunnable_form("rm -rf /tmp"), None);
     }
 
     #[test]
     fn is_safe_to_rerun_rejects_unknown() {
         assert!(!is_safe_to_rerun("some-random-binary"));
-        assert!(!is_safe_to_rerun("curl https://example.com"));
+        // curl GET is now allowed
+        assert!(is_safe_to_rerun("curl https://example.com"));
+        // curl POST is rejected
+        assert!(!is_safe_to_rerun("curl -X POST https://example.com"));
+        assert!(!is_safe_to_rerun("curl -d 'data' https://example.com"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_handles_chains() {
+        // All clauses safe → safe
+        assert!(is_safe_to_rerun("ls -la && git status && wc -l Cargo.toml"));
+        // Any unsafe clause → unsafe
+        assert!(!is_safe_to_rerun("ls -la && rm -rf /tmp/foo"));
+        assert!(!is_safe_to_rerun("git status && git push"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_strips_env_prefix() {
+        assert!(is_safe_to_rerun("RUST_BACKTRACE=1 cargo test"));
+        assert!(is_safe_to_rerun("DEBUG=1 LOG=verbose ls -la"));
+        // Env prefix doesn't make a destructive cmd safe
+        assert!(!is_safe_to_rerun("FOO=bar rm -rf /tmp"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_sed_modes() {
+        assert!(is_safe_to_rerun("sed -n '1,10p' file.txt"));
+        assert!(is_safe_to_rerun("sed 's/foo/bar/' file.txt")); // outputs to stdout
+        assert!(!is_safe_to_rerun("sed -i 's/foo/bar/' file.txt"));
+        assert!(!is_safe_to_rerun("sed --in-place 's/foo/bar/' file.txt"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_cargo_fmt_check_only() {
+        assert!(is_safe_to_rerun("cargo fmt --check"));
+        assert!(!is_safe_to_rerun("cargo fmt")); // would rewrite files
+    }
+
+    #[test]
+    fn is_safe_to_rerun_sqlite3_select_only() {
+        assert!(is_safe_to_rerun("sqlite3 db.sqlite 'SELECT * FROM users'"));
+        assert!(!is_safe_to_rerun(
+            "sqlite3 db.sqlite 'INSERT INTO users VALUES (1)'"
+        ));
+        assert!(!is_safe_to_rerun("sqlite3 db.sqlite 'DROP TABLE users'"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_cargo_build_allowed() {
+        assert!(is_safe_to_rerun("cargo build"));
+        assert!(is_safe_to_rerun("cargo build --release"));
     }
 
     // =========================================================================

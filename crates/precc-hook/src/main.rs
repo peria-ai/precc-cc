@@ -788,20 +788,131 @@ fn run_post_observe(
         if let Some(stash) = post_observe::read_stash(&data_dir, rewritten_hash) {
             let measure_start = std::time::Instant::now();
 
-            let (original_tokens, method) = if post_observe::is_safe_to_rerun(&stash.original_cmd) {
-                // Ground truth: run the original command and measure output
-                match std::process::Command::new("bash")
-                    .args(["-c", &stash.original_cmd])
-                    .current_dir(&stash.cwd)
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .output()
-                {
-                    Ok(output) => {
-                        let total_bytes = output.stdout.len() as u64 + output.stderr.len() as u64;
-                        (total_bytes / 4, "ground_truth")
+            // Derive identity fields used by both live measurement and the
+            // background spawn fallback.
+            let rewrite_type = stash
+                .rewrite_types
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let compression_mode =
+                precc_core::mode::CompressionMode::from_pipeline_reasons(&stash.rewrite_types);
+
+            // Configurable measurement budget. Default 3s for foreground —
+            // anything slower goes to a background thread that updates the
+            // cache for future runs but doesn't block this PostToolUse.
+            let foreground_budget_ms: u64 = std::env::var("PRECC_MEASURE_BUDGET_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3000);
+            // Cache TTL: how stale a previous measurement can be before we
+            // re-measure. Default 1 hour — long enough that cargo build only
+            // gets measured once per session typically.
+            let cache_ttl_secs: i64 = std::env::var("PRECC_MEASURE_CACHE_TTL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600);
+
+            // Get a rerunnable form of the original command (strips output
+            // redirects so we don't clobber files during measurement).
+            let (original_tokens, method) = if let Some(safe_cmd) =
+                post_observe::rerunnable_form(&stash.original_cmd)
+            {
+                // Step 1: try cached measurement for this cmd_class+mode
+                let cached = if let Ok(conn) = db::open_metrics(&data_dir) {
+                    precc_core::metrics::cached_measurement(
+                        &conn,
+                        &stash.cmd_class,
+                        compression_mode.as_str(),
+                        cache_ttl_secs,
+                    )
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                };
+
+                if let Some((tokens, _age)) = cached {
+                    (tokens, "cache_hit")
+                } else {
+                    // Step 2: run the command with a timeout budget
+                    use std::process::{Command, Stdio};
+                    use std::time::{Duration, Instant};
+
+                    let child_result = Command::new("bash")
+                        .args(["-c", &safe_cmd])
+                        .current_dir(&stash.cwd)
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .stdin(Stdio::null())
+                        .spawn();
+
+                    match child_result {
+                        Ok(mut child) => {
+                            let deadline =
+                                Instant::now() + Duration::from_millis(foreground_budget_ms);
+                            let mut completed = false;
+                            loop {
+                                match child.try_wait() {
+                                    Ok(Some(_)) => {
+                                        completed = true;
+                                        break;
+                                    }
+                                    Ok(None) => {
+                                        if Instant::now() >= deadline {
+                                            break;
+                                        }
+                                        std::thread::sleep(Duration::from_millis(50));
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+
+                            if completed {
+                                match child.wait_with_output() {
+                                    Ok(output) => {
+                                        let total_bytes = output.stdout.len() as u64
+                                            + output.stderr.len() as u64;
+                                        (total_bytes / 4, "ground_truth")
+                                    }
+                                    Err(_) => (estimated_tokens, "measurement_failed"),
+                                }
+                            } else {
+                                // Foreground budget exceeded — detach the
+                                // process to a background thread that will
+                                // wait for completion and update the cache
+                                // for future invocations of this cmd_class.
+                                // We move the Child handle into the thread.
+                                let cmd_class = stash.cmd_class.clone();
+                                let cm_str = compression_mode.as_str().to_string();
+                                let sid = session_id.to_string();
+                                let rt = rewrite_type.clone();
+                                let dd = data_dir.clone();
+                                std::thread::spawn(move || {
+                                    if let Ok(output) = child.wait_with_output() {
+                                        let total_bytes = output.stdout.len() as u64
+                                            + output.stderr.len() as u64;
+                                        let original_tokens = total_bytes / 4;
+                                        post_observe::append_savings_measurement(
+                                            &dd,
+                                            &cmd_class,
+                                            &rt,
+                                            &cm_str,
+                                            "live",
+                                            &sid,
+                                            original_tokens,
+                                            estimated_tokens,
+                                            "ground_truth_background",
+                                            0.0,
+                                        );
+                                    }
+                                });
+                                (estimated_tokens, "deferred_to_background")
+                            }
+                        }
+                        Err(_) => (estimated_tokens, "measurement_failed"),
                     }
-                    Err(_) => (estimated_tokens, "measurement_failed"),
                 }
             } else {
                 // Unsafe to re-run — skip measurement, don't claim savings
@@ -809,20 +920,13 @@ fn run_post_observe(
             };
 
             let measure_ms = measure_start.elapsed().as_secs_f64() * 1000.0;
-            let rewrite_type = stash
-                .rewrite_types
-                .first()
-                .map(|s| s.as_str())
-                .unwrap_or("unknown");
-            let compression_mode =
-                precc_core::mode::CompressionMode::from_pipeline_reasons(&stash.rewrite_types);
 
-            // Only log if we got a real measurement (ground_truth)
-            if method == "ground_truth" {
+            // Only log if we got a real measurement (ground_truth or cache_hit)
+            if method == "ground_truth" || method == "cache_hit" {
                 post_observe::append_savings_measurement(
                     &data_dir,
                     &stash.cmd_class,
-                    rewrite_type,
+                    &rewrite_type,
                     compression_mode.as_str(),
                     "live",
                     session_id,

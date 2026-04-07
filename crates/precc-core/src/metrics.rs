@@ -281,6 +281,37 @@ pub struct RewriteTypeSavings {
     pub total_savings_tokens: u64,
 }
 
+/// Check if we have a recent measurement for this cmd_class+mode.
+/// Returns Some((original_tokens, age_seconds)) if a measurement exists
+/// within the last `ttl_seconds`. Used to avoid re-measuring expensive
+/// commands like `cargo build` on every invocation.
+pub fn cached_measurement(
+    conn: &Connection,
+    cmd_class: &str,
+    compression_mode: &str,
+    ttl_seconds: i64,
+) -> Result<Option<(u64, i64)>> {
+    let row: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT original_output_tokens,
+                    CAST((julianday('now') - julianday(timestamp)) * 86400 AS INTEGER) AS age_secs
+             FROM savings_measurements
+             WHERE cmd_class = ?1
+               AND compression_mode = ?2
+               AND probe_kind = 'live'
+             ORDER BY timestamp DESC
+             LIMIT 1",
+            rusqlite::params![cmd_class, compression_mode],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .ok();
+
+    match row {
+        Some((tokens, age)) if age <= ttl_seconds => Ok(Some((tokens as u64, age))),
+        _ => Ok(None),
+    }
+}
+
 /// Get the historical baseline (avg original_output_tokens) for a cmd_class.
 /// Returns (avg, count). Used for output_too_small detection.
 pub fn historical_baseline(conn: &Connection, cmd_class: &str) -> Result<(f64, i64)> {
