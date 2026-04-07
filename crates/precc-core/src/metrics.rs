@@ -206,11 +206,14 @@ pub fn import_savings_log(conn: &Connection, data_dir: &std::path::Path) -> Resu
         };
 
         let _ = conn.execute(
-            "INSERT INTO savings_measurements (timestamp, cmd_class, rewrite_type, original_output_tokens, actual_output_tokens, savings_tokens, savings_pct, measurement_method)
-             VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO savings_measurements (timestamp, cmd_class, rewrite_type, compression_mode, probe_kind, session_id, original_output_tokens, actual_output_tokens, savings_tokens, savings_pct, measurement_method)
+             VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 v.get("cmd_class").and_then(|s| s.as_str()).unwrap_or(""),
                 v.get("rewrite_type").and_then(|s| s.as_str()).unwrap_or(""),
+                v.get("compression_mode").and_then(|s| s.as_str()).unwrap_or("basic"),
+                v.get("probe_kind").and_then(|s| s.as_str()).unwrap_or("live"),
+                v.get("session_id").and_then(|s| s.as_str()).unwrap_or(""),
                 v.get("original_output_tokens").and_then(|n| n.as_i64()).unwrap_or(0),
                 v.get("actual_output_tokens").and_then(|n| n.as_i64()).unwrap_or(0),
                 v.get("savings_tokens").and_then(|n| n.as_i64()).unwrap_or(0),
@@ -276,6 +279,19 @@ pub struct RewriteTypeSavings {
     pub count: u64,
     pub avg_savings_pct: f64,
     pub total_savings_tokens: u64,
+}
+
+/// Get the historical baseline (avg original_output_tokens) for a cmd_class.
+/// Returns (avg, count). Used for output_too_small detection.
+pub fn historical_baseline(conn: &Connection, cmd_class: &str) -> Result<(f64, i64)> {
+    let row = conn.query_row(
+        "SELECT COALESCE(AVG(original_output_tokens), 0), COUNT(*)
+         FROM savings_measurements
+         WHERE cmd_class = ?1 AND probe_kind = 'live'",
+        rusqlite::params![cmd_class],
+        |r| Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?)),
+    )?;
+    Ok(row)
 }
 
 /// Query savings grouped by rewrite type.

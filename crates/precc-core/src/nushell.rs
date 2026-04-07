@@ -253,6 +253,68 @@ static NU_RULES: &[NuRule] = &[
     NuRule { from: "sg", nu_command: "sg 2>&1", rtk_baseline: 40, compression_ratio: 0.70 },
     NuRule { from: "postconf", nu_command: "postconf 2>&1 | nu -c 'lines | first 20'", rtk_baseline: 40, compression_ratio: 0.40 },
     NuRule { from: "doveconf", nu_command: "doveconf 2>&1 | nu -c 'lines | first 20'", rtk_baseline: 40, compression_ratio: 0.40 },
+
+    // --- Java/JVM (added v0.3.3 — measure to find sweetspots) ---
+    NuRule { from: "mvn test", nu_command: "mvn test -q -B 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"FAIL\") or ($l | str contains \"ERROR\") or ($l | str contains \"Tests run\") or ($l | str contains \"BUILD\")}'", rtk_baseline: 4000, compression_ratio: 0.18 },
+    NuRule { from: "mvn compile", nu_command: "mvn compile -q -B 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"ERROR\") or ($l | str contains \"BUILD\")}'", rtk_baseline: 2500, compression_ratio: 0.15 },
+    NuRule { from: "mvn package", nu_command: "mvn package -q -B -DskipTests 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"BUILD\") or ($l | str contains \"ERROR\")}'", rtk_baseline: 3500, compression_ratio: 0.12 },
+    NuRule { from: "mvn dependency:tree", nu_command: "mvn dependency:tree -q 2>&1 | nu -c 'lines | where {|l| ($l | str starts-with \"[INFO] +-\") or ($l | str starts-with \"[INFO] \\\\-\")}'", rtk_baseline: 3000, compression_ratio: 0.35 },
+    NuRule { from: "gradle build", nu_command: "gradle build -q --console=plain 2>&1 | nu -c 'lines | where {|l| not ($l | is-empty)}'", rtk_baseline: 4500, compression_ratio: 0.20 },
+    NuRule { from: "gradle test", nu_command: "gradle test -q --console=plain 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"FAIL\") or ($l | str contains \"PASS\") or ($l | str contains \"BUILD\")}'", rtk_baseline: 4000, compression_ratio: 0.18 },
+    NuRule { from: "gradle dependencies", nu_command: "gradle dependencies -q --console=plain 2>&1 | nu -c 'lines | first 200'", rtk_baseline: 5000, compression_ratio: 0.30 },
+
+    // --- C/C++ build systems ---
+    NuRule { from: "cmake --build", nu_command: "cmake --build . 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"error\") or ($l | str contains \"warning\") or ($l | str contains \"%\")}'", rtk_baseline: 3000, compression_ratio: 0.20 },
+    NuRule { from: "cmake .", nu_command: "cmake . 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"--\") or ($l | str contains \"Error\")} | last 50'", rtk_baseline: 2000, compression_ratio: 0.30 },
+    NuRule { from: "ninja", nu_command: "ninja 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"error\") or ($l | str contains \"FAILED\") or ($l | str contains \"warning\")}'", rtk_baseline: 2500, compression_ratio: 0.15 },
+    NuRule { from: "bazel build", nu_command: "bazel build 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"ERROR\") or ($l | str contains \"INFO: Build\") or ($l | str contains \"Target\")}'", rtk_baseline: 4000, compression_ratio: 0.18 },
+    NuRule { from: "bazel test", nu_command: "bazel test 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"FAIL\") or ($l | str contains \"PASS\") or ($l | str contains \"Executed\")}'", rtk_baseline: 4500, compression_ratio: 0.18 },
+
+    // --- Ruby ---
+    NuRule { from: "bundle install", nu_command: "bundle install --quiet 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"Error\") or ($l | str contains \"Installing\")}'", rtk_baseline: 2500, compression_ratio: 0.20 },
+    NuRule { from: "bundle exec rspec", nu_command: "bundle exec rspec --format progress 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"failure\") or ($l | str contains \"example\") or ($l | str contains \"F\")}'", rtk_baseline: 3000, compression_ratio: 0.25 },
+    NuRule { from: "bundle exec", nu_command: "bundle exec 2>&1 | nu -c 'lines | last 50'", rtk_baseline: 1500, compression_ratio: 0.30 },
+    NuRule { from: "gem list", nu_command: "gem list 2>&1 | nu -c 'lines | parse \"{name} ({version})\" | to json -r'", rtk_baseline: 2000, compression_ratio: 0.40 },
+    NuRule { from: "gem install", nu_command: "gem install 2>&1 | nu -c 'lines | last 5'", rtk_baseline: 1500, compression_ratio: 0.20 },
+
+    // --- PHP ---
+    NuRule { from: "composer install", nu_command: "composer install --no-progress -q 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"Error\") or ($l | str contains \"Installing\")}'", rtk_baseline: 3500, compression_ratio: 0.15 },
+    NuRule { from: "composer update", nu_command: "composer update --no-progress -q 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"Updating\") or ($l | str contains \"Error\")}'", rtk_baseline: 4000, compression_ratio: 0.15 },
+    NuRule { from: "composer require", nu_command: "composer require --no-progress 2>&1 | nu -c 'lines | last 10'", rtk_baseline: 3000, compression_ratio: 0.20 },
+
+    // --- TypeScript / JavaScript ---
+    NuRule { from: "tsc --noEmit", nu_command: "tsc --noEmit --pretty false 2>&1 | nu -c 'lines | where {|l| $l | str contains \"error TS\"}'", rtk_baseline: 3000, compression_ratio: 0.10 },
+    NuRule { from: "tsc", nu_command: "tsc --pretty false 2>&1 | nu -c 'lines | where {|l| $l | str contains \"error TS\"}'", rtk_baseline: 3000, compression_ratio: 0.10 },
+    NuRule { from: "jest", nu_command: "jest --reporters=default --silent 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"PASS\") or ($l | str contains \"FAIL\") or ($l | str contains \"Tests:\")}'", rtk_baseline: 4000, compression_ratio: 0.15 },
+    NuRule { from: "vitest run", nu_command: "vitest run --reporter=basic 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"✓\") or ($l | str contains \"✗\") or ($l | str contains \"Test Files\")}'", rtk_baseline: 3500, compression_ratio: 0.18 },
+    NuRule { from: "playwright test", nu_command: "playwright test --reporter=line 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"passed\") or ($l | str contains \"failed\")}'", rtk_baseline: 5000, compression_ratio: 0.12 },
+    NuRule { from: "npm install", nu_command: "npm install --silent 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"added\") or ($l | str contains \"npm ERR\") or ($l | str contains \"WARN\")}'", rtk_baseline: 3500, compression_ratio: 0.15 },
+    NuRule { from: "npm run build", nu_command: "npm run build --silent 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"error\") or ($l | str contains \"compiled\")} | last 30'", rtk_baseline: 3000, compression_ratio: 0.18 },
+    NuRule { from: "ts-node", nu_command: "ts-node 2>&1 | nu -c 'lines | where {|l| $l | str contains \"Error\"}'", rtk_baseline: 2000, compression_ratio: 0.20 },
+
+    // --- Databases ---
+    NuRule { from: "psql -c", nu_command: "psql -A -F'\\t' --pset=footer=off -c 2>&1", rtk_baseline: 2500, compression_ratio: 0.45 },
+    NuRule { from: "psql -l", nu_command: "psql -l -A -F'\\t' --pset=footer=off 2>&1 | nu -c 'lines | first 50'", rtk_baseline: 1500, compression_ratio: 0.30 },
+    NuRule { from: "mysql -e", nu_command: "mysql --batch --raw -e 2>&1", rtk_baseline: 2500, compression_ratio: 0.45 },
+    NuRule { from: "sqlite3", nu_command: "sqlite3 -json 2>&1", rtk_baseline: 2000, compression_ratio: 0.40 },
+
+    // --- Data tools ---
+    NuRule { from: "jq", nu_command: "jq -c", rtk_baseline: 1500, compression_ratio: 0.50 },
+    NuRule { from: "yq", nu_command: "yq -o=json", rtk_baseline: 1500, compression_ratio: 0.50 },
+
+    // --- Cloud / IaC ---
+    NuRule { from: "terraform plan", nu_command: "terraform plan -no-color -compact-warnings 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"+\") or ($l | str contains \"-\") or ($l | str contains \"~\") or ($l | str contains \"Error\")}'", rtk_baseline: 6000, compression_ratio: 0.20 },
+    NuRule { from: "terraform apply", nu_command: "terraform apply -no-color -auto-approve -compact-warnings 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"Apply complete\") or ($l | str contains \"Error\") or ($l | str contains \"Creating\")} | last 50'", rtk_baseline: 8000, compression_ratio: 0.10 },
+    NuRule { from: "terraform validate", nu_command: "terraform validate -json", rtk_baseline: 1500, compression_ratio: 0.25 },
+    NuRule { from: "ansible-playbook", nu_command: "ansible-playbook 2>&1 | nu -c 'lines | where {|l| ($l | str contains \"PLAY RECAP\") or ($l | str contains \"failed=\") or ($l | str contains \"fatal:\")}'", rtk_baseline: 5000, compression_ratio: 0.10 },
+    NuRule { from: "helm install", nu_command: "helm install --no-hooks 2>&1 | nu -c 'lines | last 20'", rtk_baseline: 3000, compression_ratio: 0.15 },
+    NuRule { from: "helm upgrade", nu_command: "helm upgrade --no-hooks 2>&1 | nu -c 'lines | last 20'", rtk_baseline: 3000, compression_ratio: 0.15 },
+    NuRule { from: "helm list", nu_command: "helm list -o json 2>&1 | nu -c 'from json | select name namespace status'", rtk_baseline: 2500, compression_ratio: 0.35 },
+
+    // --- Security tools ---
+    NuRule { from: "nmap", nu_command: "nmap -oG - 2>&1 | nu -c 'lines | where {|l| $l | str starts-with \"Host:\"}'", rtk_baseline: 2500, compression_ratio: 0.30 },
+    NuRule { from: "trivy fs", nu_command: "trivy fs --format json 2>&1 | nu -c 'from json | get Results'", rtk_baseline: 5000, compression_ratio: 0.20 },
+    NuRule { from: "bandit", nu_command: "bandit -f json 2>&1 | nu -c 'from json | get results'", rtk_baseline: 3000, compression_ratio: 0.25 },
 ];
 
 /// Helper: check if command starts with prefix as a whole word.

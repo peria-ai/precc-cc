@@ -325,10 +325,17 @@ pub fn is_safe_to_rerun(command: &str) -> bool {
 // ─── Savings measurement logging ───────────────────────────────────────────
 
 /// Append a savings measurement to the log file.
+///
+/// `compression_mode` is the explicit mode (basic/diet/nushell/lean-ctx/rtk/adaptive-expand).
+/// `probe_kind` is "live" (the actual mode that ran) or "probe" (multi-mode probe).
+/// `session_id` is the Claude Code session for cross-tool correlation.
 pub fn append_savings_measurement(
     data_dir: &Path,
     cmd_class: &str,
     rewrite_type: &str,
+    compression_mode: &str,
+    probe_kind: &str,
+    session_id: &str,
     original_output_tokens: u64,
     actual_output_tokens: u64,
     measurement_method: &str,
@@ -348,8 +355,9 @@ pub fn append_savings_measurement(
 
     let log_path = data_dir.join("savings_measurements.jsonl");
     let line = format!(
-        "{{\"ts\":{},\"cmd_class\":\"{}\",\"rewrite_type\":\"{}\",\"original_output_tokens\":{},\"actual_output_tokens\":{},\"savings_tokens\":{},\"savings_pct\":{:.1},\"measurement_method\":\"{}\",\"measurement_latency_ms\":{:.1}}}\n",
-        ts, cmd_class, rewrite_type, original_output_tokens, actual_output_tokens,
+        "{{\"ts\":{},\"cmd_class\":\"{}\",\"rewrite_type\":\"{}\",\"compression_mode\":\"{}\",\"probe_kind\":\"{}\",\"session_id\":\"{}\",\"original_output_tokens\":{},\"actual_output_tokens\":{},\"savings_tokens\":{},\"savings_pct\":{:.1},\"measurement_method\":\"{}\",\"measurement_latency_ms\":{:.1}}}\n",
+        ts, cmd_class, rewrite_type, compression_mode, probe_kind, session_id,
+        original_output_tokens, actual_output_tokens,
         savings_tokens, savings_pct, measurement_method, measurement_latency_ms
     );
 
@@ -986,5 +994,129 @@ mod tests {
     fn is_bash_failure_no_error() {
         let input = json!({"tool_response": "all good"});
         assert!(!is_bash_failure(&input));
+    }
+
+    // =========================================================================
+    // Safety classifier (is_safe_to_rerun)
+    // =========================================================================
+
+    #[test]
+    fn is_safe_to_rerun_read_only_commands() {
+        assert!(is_safe_to_rerun("ls -la"));
+        assert!(is_safe_to_rerun("cat file.txt"));
+        assert!(is_safe_to_rerun("head -20 file.rs"));
+        assert!(is_safe_to_rerun("grep -r pattern ."));
+        assert!(is_safe_to_rerun("wc -l src/*.rs"));
+        assert!(is_safe_to_rerun("find . -name '*.rs'"));
+        assert!(is_safe_to_rerun("git status"));
+        assert!(is_safe_to_rerun("git diff HEAD~1"));
+        assert!(is_safe_to_rerun("git log --oneline -5"));
+        assert!(is_safe_to_rerun("cargo test --release"));
+        assert!(is_safe_to_rerun("cargo clippy --all-targets"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_with_cd_prefix() {
+        assert!(is_safe_to_rerun("cd /app && git status"));
+        assert!(is_safe_to_rerun("cd /app && cargo test"));
+        assert!(is_safe_to_rerun("cd /app && ls -la"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_strips_rtk_wrapper() {
+        assert!(is_safe_to_rerun("rtk git status"));
+        assert!(is_safe_to_rerun("rtk cargo test"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_rejects_destructive() {
+        assert!(!is_safe_to_rerun("rm -rf /tmp/stuff"));
+        assert!(!is_safe_to_rerun("mv file.txt /tmp/"));
+        assert!(!is_safe_to_rerun("mkdir -p /tmp/new"));
+        assert!(!is_safe_to_rerun("docker run ubuntu"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_rejects_redirects() {
+        assert!(!is_safe_to_rerun("ls > output.txt"));
+        assert!(!is_safe_to_rerun("echo hi >> log.txt"));
+    }
+
+    #[test]
+    fn is_safe_to_rerun_rejects_unknown() {
+        assert!(!is_safe_to_rerun("some-random-binary"));
+        assert!(!is_safe_to_rerun("curl https://example.com"));
+    }
+
+    // =========================================================================
+    // Stash mechanism
+    // =========================================================================
+
+    #[test]
+    fn stash_write_read_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash = 0xDEADBEEF_u64;
+
+        // Write
+        write_stash(
+            tmp.path(), hash,
+            "git status", "rtk git status",
+            "/home/user/project", "git status",
+            &["rtk-rewrite".to_string()],
+        );
+
+        // Read
+        let entry = read_stash(tmp.path(), hash);
+        assert!(entry.is_some());
+        let entry = entry.unwrap();
+        assert_eq!(entry.original_cmd, "git status");
+        assert_eq!(entry.rewritten_cmd, "rtk git status");
+        assert_eq!(entry.cwd, "/home/user/project");
+        assert_eq!(entry.cmd_class, "git status");
+        assert_eq!(entry.rewrite_types, vec!["rtk-rewrite"]);
+
+        // Delete
+        delete_stash(tmp.path(), hash);
+        assert!(read_stash(tmp.path(), hash).is_none());
+    }
+
+    #[test]
+    fn stash_no_file_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_stash(tmp.path(), 12345).is_none());
+    }
+
+    #[test]
+    fn savings_measurement_append() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        append_savings_measurement(
+            tmp.path(),
+            "git status",
+            "rtk-rewrite",
+            "rtk",          // compression_mode
+            "live",         // probe_kind
+            "test-session", // session_id
+            500,            // original
+            120,            // actual
+            "ground_truth",
+            15.3,
+        );
+
+        let log_path = tmp.path().join("savings_measurements.jsonl");
+        assert!(log_path.exists());
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let parsed: Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed["cmd_class"].as_str().unwrap(), "git status");
+        assert_eq!(parsed["rewrite_type"].as_str().unwrap(), "rtk-rewrite");
+        assert_eq!(parsed["compression_mode"].as_str().unwrap(), "rtk");
+        assert_eq!(parsed["probe_kind"].as_str().unwrap(), "live");
+        assert_eq!(parsed["session_id"].as_str().unwrap(), "test-session");
+        assert_eq!(parsed["original_output_tokens"].as_u64().unwrap(), 500);
+        assert_eq!(parsed["actual_output_tokens"].as_u64().unwrap(), 120);
+        assert_eq!(parsed["savings_tokens"].as_u64().unwrap(), 380);
+        assert!((parsed["savings_pct"].as_f64().unwrap() - 76.0).abs() < 0.1);
+        assert_eq!(parsed["measurement_method"].as_str().unwrap(), "ground_truth");
     }
 }

@@ -373,6 +373,12 @@ fn run_bash_pipeline(
         })
         .unwrap_or_default();
 
+    let session_id = hook_input
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     // Run pipeline
     let mut pipeline = Pipeline::new(command, cwd);
     pipeline.run();
@@ -429,6 +435,46 @@ fn run_bash_pipeline(
                 &cmd_class,
                 &pipeline.reasons,
             );
+
+            // Session ring tracking + follow-up diagnostic detection
+            if !session_id.is_empty() {
+                use precc_core::mode::CompressionMode;
+                let mode = CompressionMode::from_pipeline_reasons(&pipeline.reasons);
+
+                // Check if this command is a follow-up to the previous one
+                if let Some(prev) =
+                    precc_core::session_ring::previous(&data_dir, &session_id)
+                {
+                    if precc_core::session_ring::is_follow_up_diagnostic(
+                        &prev,
+                        &cmd_class,
+                        &pipeline.original,
+                    ) {
+                        precc_core::mode_selector::record_failure(
+                            &data_dir,
+                            &prev.cmd_class,
+                            &prev.mode_used,
+                            "follow_up_diagnostic",
+                            &pipeline.original,
+                        );
+                    }
+                }
+
+                // Push current command to ring
+                precc_core::session_ring::push_command(
+                    &data_dir,
+                    &session_id,
+                    precc_core::session_ring::SessionEntry {
+                        ts: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                        cmd_class: cmd_class.clone(),
+                        cmd: pipeline.original.clone(),
+                        mode_used: mode.as_str().to_string(),
+                    },
+                );
+            }
         }
     }
 
@@ -768,6 +814,8 @@ fn run_post_observe(
                 .first()
                 .map(|s| s.as_str())
                 .unwrap_or("unknown");
+            let compression_mode =
+                precc_core::mode::CompressionMode::from_pipeline_reasons(&stash.rewrite_types);
 
             // Only log if we got a real measurement (ground_truth)
             if method == "ground_truth" {
@@ -775,10 +823,49 @@ fn run_post_observe(
                     &data_dir,
                     &stash.cmd_class,
                     rewrite_type,
+                    compression_mode.as_str(),
+                    "live",
+                    session_id,
                     original_tokens,
                     estimated_tokens,
                     method,
                     measure_ms,
+                );
+
+                // output_too_small detection: if the actual output is dramatically
+                // smaller than the historical baseline for this command class,
+                // record it as a potential compression-induced data loss event.
+                if let Ok(conn) = db::open_metrics(&data_dir) {
+                    if let Ok((baseline_avg, n)) =
+                        precc_core::metrics::historical_baseline(&conn, &stash.cmd_class)
+                    {
+                        if n >= 5
+                            && baseline_avg >= 200.0
+                            && (estimated_tokens as f64) < baseline_avg * 0.05
+                        {
+                            precc_core::mode_selector::record_failure(
+                                &data_dir,
+                                &stash.cmd_class,
+                                compression_mode.as_str(),
+                                "output_too_small",
+                                &format!(
+                                    "actual={} baseline={:.0}",
+                                    estimated_tokens, baseline_avg
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                // Multi-mode probe: if PRECC_MULTI_MODE_PROBE=1, also run the
+                // original command through OTHER compression modes to compare.
+                precc_core::multi_probe::maybe_probe_all_modes(
+                    &data_dir,
+                    &stash.cmd_class,
+                    &stash.original_cmd,
+                    &stash.cwd,
+                    session_id,
+                    compression_mode,
                 );
             }
 
@@ -1044,19 +1131,50 @@ impl Pipeline {
         self.stage_diet();
         self.validate_mutation(&before, "diet");
 
-        // Stage 6: Output compression — mutually exclusive, priority order:
-        //   6a: Nushell (PRECC_NUSHELL=1)
-        //   6b: lean-ctx (PRECC_LEAN_CTX=1) — external output compression
-        //   6c: RTK (fallback)
+        // Stage 6: Output compression — mutually exclusive.
+        // Order: adaptive selection (data-driven) → static priority fallback.
         let before = self.command.clone();
-        if nushell::nushell_mode_enabled() {
-            self.stage_nushell();
+
+        // Adaptive selection: if we have measurement data favoring a specific
+        // mode for this command class, try that mode FIRST.
+        let cmd_class = post_observe::command_class(&self.command);
+        let preferred = if !cmd_class.is_empty() {
+            db::data_dir()
+                .ok()
+                .and_then(|d| precc_core::mode_selector::select_best_mode(&d, &cmd_class))
+        } else {
+            None
+        };
+
+        if let Some(mode) = preferred {
+            use precc_core::mode::CompressionMode;
+            self.reasons
+                .push(format!("adaptive-selector:{}", mode.as_str()));
+            match mode {
+                CompressionMode::Nushell if nushell::nushell_mode_enabled() => {
+                    self.stage_nushell();
+                }
+                CompressionMode::LeanCtx if lean_ctx::lean_ctx_mode_enabled() => {
+                    self.stage_lean_ctx();
+                }
+                CompressionMode::Rtk => {
+                    self.stage_rtk();
+                }
+                _ => {} // basic/diet/adaptive-expand: no compression stage
+            }
         }
-        if !self.had_nushell_wrap && lean_ctx::lean_ctx_mode_enabled() {
-            self.stage_lean_ctx();
-        }
-        if !self.had_nushell_wrap && !self.had_lean_ctx_wrap {
-            self.stage_rtk();
+
+        // Static priority fallback (only if adaptive selection didn't fire or returned no rewrite)
+        if !self.had_nushell_wrap && !self.had_lean_ctx_wrap && !self.had_rtk_rewrite {
+            if nushell::nushell_mode_enabled() {
+                self.stage_nushell();
+            }
+            if !self.had_nushell_wrap && lean_ctx::lean_ctx_mode_enabled() {
+                self.stage_lean_ctx();
+            }
+            if !self.had_nushell_wrap && !self.had_lean_ctx_wrap {
+                self.stage_rtk();
+            }
         }
         self.validate_mutation(&before, "output-compression");
 

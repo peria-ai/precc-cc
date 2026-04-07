@@ -319,8 +319,42 @@ fn init_metrics_schema(conn: &Connection) -> Result<()> {
             measurement_method     TEXT NOT NULL\
         );\
         CREATE INDEX IF NOT EXISTS idx_savings_class ON savings_measurements(cmd_class);\
-        CREATE INDEX IF NOT EXISTS idx_savings_type ON savings_measurements(rewrite_type);"
+        CREATE INDEX IF NOT EXISTS idx_savings_type ON savings_measurements(rewrite_type);\
+        CREATE TABLE IF NOT EXISTS compression_failures (\
+            id        INTEGER PRIMARY KEY,\
+            timestamp INTEGER NOT NULL,\
+            cmd_class TEXT NOT NULL,\
+            mode      TEXT,\
+            signal    TEXT NOT NULL,\
+            detail    TEXT\
+        );\
+        CREATE INDEX IF NOT EXISTS idx_cf_class_ts ON compression_failures(cmd_class, timestamp);"
     ))?;
+
+    // Additive migrations: add new columns if they don't exist yet.
+    // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we ignore errors.
+    let _ = conn.execute_batch("ALTER TABLE savings_measurements ADD COLUMN compression_mode TEXT;");
+    let _ = conn.execute_batch("ALTER TABLE savings_measurements ADD COLUMN probe_kind TEXT DEFAULT 'live';");
+    let _ = conn.execute_batch("ALTER TABLE savings_measurements ADD COLUMN session_id TEXT;");
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_savings_mode ON savings_measurements(compression_mode);");
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_savings_class_mode ON savings_measurements(cmd_class, compression_mode);");
+
+    // One-shot backfill: derive compression_mode from rewrite_type for existing rows
+    let _ = conn.execute_batch(
+        "UPDATE savings_measurements SET compression_mode = 'nushell'
+            WHERE compression_mode IS NULL AND rewrite_type LIKE 'nushell%';
+         UPDATE savings_measurements SET compression_mode = 'diet'
+            WHERE compression_mode IS NULL AND rewrite_type = 'diet';
+         UPDATE savings_measurements SET compression_mode = 'rtk'
+            WHERE compression_mode IS NULL AND (rewrite_type LIKE 'rtk%' OR rewrite_type = 'jj-translate');
+         UPDATE savings_measurements SET compression_mode = 'lean-ctx'
+            WHERE compression_mode IS NULL AND rewrite_type LIKE 'lean-ctx%';
+         UPDATE savings_measurements SET compression_mode = 'adaptive-expand'
+            WHERE compression_mode IS NULL AND rewrite_type LIKE 'adaptive-expand%';
+         UPDATE savings_measurements SET compression_mode = 'basic'
+            WHERE compression_mode IS NULL;"
+    );
+
     Ok(())
 }
 

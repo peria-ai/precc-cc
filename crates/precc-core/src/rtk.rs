@@ -706,7 +706,7 @@ fn matches_prefix(command: &str, prefix: &str) -> bool {
 /// Check if the `rtk` binary is available on PATH.
 /// Uses a cached marker file to avoid scanning PATH on every invocation.
 /// Falls back to PATH scan if the cache is missing.
-fn rtk_available() -> bool {
+pub fn rtk_available() -> bool {
     static AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
         // Fast path: check cached marker file
         if let Ok(home) = std::env::var("HOME") {
