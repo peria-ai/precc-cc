@@ -1,75 +1,75 @@
-# Giới thiệu
+# Introduction
 
-## PRECC là gì?
+## What is PRECC?
 
-PRECC (Sửa lỗi dự đoán cho Claude Code) là một công cụ Rust chặn các lệnh bash của Claude Code thông qua cơ chế hook PreToolUse chính thức. Nó sửa lỗi *trước khi chúng xảy ra*, tiết kiệm token và loại bỏ vòng lặp thử lại.
+PRECC (Sửa lỗi dự đoán cho Claude Code) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 Miễn phí cho người dùng cộng đồng.
 
-## Vấn đề
+## The Problem
 
-Claude Code lãng phí token đáng kể vào các lỗi có thể phòng tránh:
+Claude Code wastes significant tokens on preventable mistakes:
 
-- **Lỗi thư mục** -- Chạy `cargo build` trong thư mục cha không có `Cargo.toml`.
-- **Vòng lặp thử lại** -- Lệnh thất bại tạo ra đầu ra dài dòng.
-- **Đầu ra dài dòng** -- Các lệnh như `find` hoặc `ls -R` xuất hàng nghìn dòng.
+- **Wrong-directory errors** -- Running `cargo build` in a parent directory that has no `Cargo.toml`, then retrying after reading the error.
+- **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
+- **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## Bốn trụ cột
+## The Four Pillars
 
 ### Sửa ngữ cảnh (cd-prepend)
 
 Phát hiện khi các lệnh như `cargo build` hoặc `npm test` chạy trong thư mục sai và thêm `cd /đường/dẫn/đúng &&` trước khi thực thi.
 
-### Gỡ lỗi GDB
+### GDB Debugging
 
-Phát hiện cơ hội gắn GDB để gỡ lỗi sâu hơn.
+Detects opportunities to attach GDB for deeper debugging of segfaults and crashes, providing structured debug information instead of raw core dumps.
 
-### Khai thác phiên
+### Session Mining
 
-Khai thác nhật ký phiên Claude Code để tìm các cặp lỗi-sửa.
+Mines Claude Code session logs for failure-fix pairs. When the same mistake recurs, PRECC already knows the fix and applies it automatically.
 
-### Kỹ năng tự động hóa
+### Automation Skills
 
-Thư viện các kỹ năng khớp với mẫu lệnh và viết lại chúng.
+A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 
-## Cách hoạt động (phiên bản 30 giây)
+## How It Works (30-Second Version)
 
-1. Claude Code chuẩn bị chạy một lệnh bash.
-2. Hook PreToolUse gửi lệnh tới `precc-hook` dưới dạng JSON.
-3. `precc-hook` xử lý lệnh trong dưới 3 mili giây.
-4. Lệnh đã sửa được trả về dưới dạng JSON.
-5. Claude Code thực thi lệnh đã sửa.
+1. Claude Code is about to run a bash command.
+2. The PreToolUse hook sends the command to `precc-hook` as JSON on stdin.
+3. `precc-hook` runs the command through the pipeline (skills, directory correction, compression) in under 3 milliseconds.
+4. The corrected command is returned as JSON on stdout.
+5. Claude Code executes the corrected command instead.
 
-Claude không bao giờ thấy lỗi.
+Claude never sees the error. No tokens wasted.
 
-### Nén thích ứng
+### Adaptive Compression
 
 Nếu một lệnh thất bại sau khi nén, PRECC tự động bỏ qua nén ở lần thử tiếp theo để Claude nhận được đầu ra đầy đủ không nén để gỡ lỗi.
 
-## Thống kê sử dụng trực tiếp
+## Live Usage Statistics
 
 Phiên bản hiện tại <span data-stat="current_version">--</span>:
 
-| Chỉ số | Giá trị |
+| Metric | Value |
 |---|---|
-| Số lần gọi hook | <span data-stat="total_invocations">--</span> |
-| Token đã tiết kiệm | <span data-stat="total_tokens_saved">--</span> |
-| Tỷ lệ tiết kiệm | <span data-stat="saving_pct">--</span>% |
-| Viết lại RTK | <span data-stat="rtk_rewrites">--</span> |
-| Sửa CD | <span data-stat="cd_prepends">--</span> |
-| Độ trễ hook | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
+| Hook invocations | <span data-stat="total_invocations">--</span> |
+| Tokens saved | <span data-stat="total_tokens_saved">--</span> |
+| Saving ratio | <span data-stat="saving_pct">--</span>% |
+| RTK rewrites | <span data-stat="rtk_rewrites">--</span> |
+| CD corrections | <span data-stat="cd_prepends">--</span> |
+| Hook latency | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Người dùng | <span data-stat="unique_users">--</span> |
 
 ### Tiết kiệm đo được (dữ liệu thực)
 
 <div id="measured-savings" style="display:none">
 <table id="measured-summary">
-<thead><tr><th>Chỉ số</th><th>Giá trị</th></tr></thead>
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
 <tbody>
 <tr><td>Token đầu ra gốc (không có PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
 <tr><td>Token đầu ra thực tế (có PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
-<tr><td>Token đã tiết kiệm</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
-<tr><td>Tỷ lệ tiết kiệm</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Tokens saved</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Saving ratio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
 <tr><td>Đo lường thực tế</td><td><span data-measured="ground_truth_count">--</span> lần đo</td></tr>
 </tbody>
 </table>
@@ -80,7 +80,7 @@ Phiên bản hiện tại <span data-stat="current_version">--</span>:
 #### Theo loại viết lại
 
 <table id="rewrite-type-table">
-<thead><tr><th>Loại</th><th>Số lần</th><th>TB tiết kiệm %</th><th>Token đã tiết kiệm</th></tr></thead>
+<thead><tr><th>Loại</th><th>Số lần</th><th>TB tiết kiệm %</th><th>Tokens saved</th></tr></thead>
 <tbody><tr><td colspan="4"><em>Đang tải...</em></td></tr></tbody>
 </table>
 </div>
@@ -88,14 +88,14 @@ Phiên bản hiện tại <span data-stat="current_version">--</span>:
 ### Tiết kiệm theo phiên bản
 
 <table id="version-breakdown" style="display:none">
-<thead><tr><th>Phiên bản</th><th>Người dùng</th><th>Số lần gọi hook</th><th>Token đã tiết kiệm</th><th>Tỷ lệ tiết kiệm</th></tr></thead>
+<thead><tr><th>Phiên bản</th><th>Người dùng</th><th>Hook invocations</th><th>Tokens saved</th><th>Saving ratio</th></tr></thead>
 <tbody><tr><td colspan="5"><em>Đang tải...</em></td></tr></tbody>
 </table>
 
-<small>Các con số này tự động cập nhật từ dữ liệu đo lường ẩn danh.</small>
+<small>These numbers update automatically from anonymized telemetry.</small>
 
-## Liên kết
+## Links
 
 - GitHub: [https://github.com/peria-ai/precc-cc](https://github.com/peria-ai/precc-cc)
-- Trang web: [https://peria.ai](https://peria.ai)
-- Tài liệu: [https://precc.cc](https://precc.cc)
+- Website: [https://peria.ai](https://peria.ai)
+- Documentation: [https://precc.cc](https://precc.cc)

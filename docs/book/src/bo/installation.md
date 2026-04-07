@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/inst
 
 ### Companion Tools (--extras)
 
-PRECC ships with optional companion tools. Install them with `--extras`:
+PRECC ships with optional companion tools that significantly increase token savings — most importantly **lean-ctx**, which contributes ~50% saving on real measured workloads. Install them with `--extras`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash -s -- --extras
@@ -47,7 +47,7 @@ This installs:
 | Tool | Purpose |
 |------|---------|
 | **RTK** | Command rewriting toolkit |
-| **lean-ctx** | Context compression for CLAUDE.md and prompt files |
+| **lean-ctx** | Deep Bash output compression — measured 50% aggregate saving across 39 command classes; 41–91% on commands with verbose output (git status, find, head -100, etc.) |
 | **nushell** | Structured shell for advanced pipelines |
 | **cocoindex-code** | Code indexing for faster context resolution |
 

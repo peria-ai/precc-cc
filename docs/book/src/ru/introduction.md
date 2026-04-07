@@ -1,75 +1,75 @@
-# Введение
+# Introduction
 
-## Что такое PRECC?
+## What is PRECC?
 
-PRECC (Предиктивная коррекция ошибок для Claude Code) — это инструмент на Rust, который перехватывает bash-команды Claude Code через официальный механизм хуков PreToolUse. Он исправляет ошибки *до их возникновения*, экономя токены и устраняя циклы повторов.
+PRECC (Предиктивная коррекция ошибок для Claude Code) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 Бесплатно для участников сообщества.
 
-## Проблема
+## The Problem
 
-Claude Code тратит значительное количество токенов на предотвратимые ошибки:
+Claude Code wastes significant tokens on preventable mistakes:
 
-- **Ошибки каталога** — выполнение `cargo build` в каталоге без `Cargo.toml`.
-- **Циклы повторов** — неудачная команда создаёт многословный вывод, Claude анализирует и повторяет.
-- **Многословный вывод** — команды вроде `find` или `ls -R` выводят тысячи строк.
+- **Wrong-directory errors** -- Running `cargo build` in a parent directory that has no `Cargo.toml`, then retrying after reading the error.
+- **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
+- **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## Четыре столпа
+## The Four Pillars
 
 ### Исправление контекста (cd-prepend)
 
 Определяет, когда команды вроде `cargo build` или `npm test` выполняются в неправильном каталоге, и добавляет `cd /правильный/путь &&` перед выполнением.
 
-### Отладка GDB
+### GDB Debugging
 
-Обнаруживает возможности подключения GDB для углублённой отладки segfault и сбоев.
+Detects opportunities to attach GDB for deeper debugging of segfaults and crashes, providing structured debug information instead of raw core dumps.
 
-### Анализ сессий
+### Session Mining
 
-Анализирует логи сессий Claude Code для поиска пар ошибка-исправление.
+Mines Claude Code session logs for failure-fix pairs. When the same mistake recurs, PRECC already knows the fix and applies it automatically.
 
-### Навыки автоматизации
+### Automation Skills
 
-Библиотека навыков, которые сопоставляют шаблоны команд и перезаписывают их.
+A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 
-## Как это работает (30-секундная версия)
+## How It Works (30-Second Version)
 
-1. Claude Code собирается выполнить bash-команду.
-2. Хук PreToolUse отправляет команду в `precc-hook` как JSON.
-3. `precc-hook` обрабатывает команду менее чем за 3 миллисекунды.
-4. Исправленная команда возвращается как JSON.
-5. Claude Code выполняет исправленную команду.
+1. Claude Code is about to run a bash command.
+2. The PreToolUse hook sends the command to `precc-hook` as JSON on stdin.
+3. `precc-hook` runs the command through the pipeline (skills, directory correction, compression) in under 3 milliseconds.
+4. The corrected command is returned as JSON on stdout.
+5. Claude Code executes the corrected command instead.
 
-Claude никогда не видит ошибку.
+Claude never sees the error. No tokens wasted.
 
-### Адаптивное сжатие
+### Adaptive Compression
 
 Если команда завершается ошибкой после сжатия, PRECC автоматически пропускает сжатие при следующей попытке, чтобы Claude получил полный несжатый вывод для отладки.
 
-## Статистика использования в реальном времени
+## Live Usage Statistics
 
 Текущая версия <span data-stat="current_version">--</span>:
 
-| Метрика | Значение |
+| Metric | Value |
 |---|---|
-| Вызовы хука | <span data-stat="total_invocations">--</span> |
-| Сэкономлено токенов | <span data-stat="total_tokens_saved">--</span> |
-| Коэффициент экономии | <span data-stat="saving_pct">--</span>% |
-| Перезаписей RTK | <span data-stat="rtk_rewrites">--</span> |
-| Коррекций CD | <span data-stat="cd_prepends">--</span> |
-| Задержка хука | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
+| Hook invocations | <span data-stat="total_invocations">--</span> |
+| Tokens saved | <span data-stat="total_tokens_saved">--</span> |
+| Saving ratio | <span data-stat="saving_pct">--</span>% |
+| RTK rewrites | <span data-stat="rtk_rewrites">--</span> |
+| CD corrections | <span data-stat="cd_prepends">--</span> |
+| Hook latency | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Пользователи | <span data-stat="unique_users">--</span> |
 
 ### Измеренная экономия (реальные данные)
 
 <div id="measured-savings" style="display:none">
 <table id="measured-summary">
-<thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
 <tbody>
 <tr><td>Исходные токены вывода (без PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
 <tr><td>Фактические токены вывода (с PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
-<tr><td>Сэкономлено токенов</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
-<tr><td>Коэффициент экономии</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Tokens saved</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Saving ratio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
 <tr><td>Реальные измерения</td><td><span data-measured="ground_truth_count">--</span> измерений</td></tr>
 </tbody>
 </table>
@@ -80,7 +80,7 @@ Claude никогда не видит ошибку.
 #### По типу перезаписи
 
 <table id="rewrite-type-table">
-<thead><tr><th>Тип</th><th>Количество</th><th>Ср. экономия %</th><th>Сэкономлено токенов</th></tr></thead>
+<thead><tr><th>Тип</th><th>Количество</th><th>Ср. экономия %</th><th>Tokens saved</th></tr></thead>
 <tbody><tr><td colspan="4"><em>Загрузка...</em></td></tr></tbody>
 </table>
 </div>
@@ -88,14 +88,14 @@ Claude никогда не видит ошибку.
 ### Экономия по версиям
 
 <table id="version-breakdown" style="display:none">
-<thead><tr><th>Версия</th><th>Пользователи</th><th>Вызовы хука</th><th>Сэкономлено токенов</th><th>Коэффициент экономии</th></tr></thead>
+<thead><tr><th>Версия</th><th>Пользователи</th><th>Hook invocations</th><th>Tokens saved</th><th>Saving ratio</th></tr></thead>
 <tbody><tr><td colspan="5"><em>Загрузка...</em></td></tr></tbody>
 </table>
 
-<small>Эти цифры обновляются автоматически из анонимизированной телеметрии.</small>
+<small>These numbers update automatically from anonymized telemetry.</small>
 
-## Ссылки
+## Links
 
 - GitHub: [https://github.com/peria-ai/precc-cc](https://github.com/peria-ai/precc-cc)
-- Веб-сайт: [https://peria.ai](https://peria.ai)
-- Документация: [https://precc.cc](https://precc.cc)
+- Website: [https://peria.ai](https://peria.ai)
+- Documentation: [https://precc.cc](https://precc.cc)

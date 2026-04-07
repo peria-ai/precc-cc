@@ -1,75 +1,75 @@
-# Introduzione
+# Introduction
 
-## Cos'è PRECC?
+## What is PRECC?
 
-PRECC (Correzione predittiva degli errori per Claude Code) è uno strumento Rust che intercetta i comandi bash di Claude Code tramite il meccanismo ufficiale PreToolUse hook. Corregge gli errori *prima che accadano*, risparmiando token ed eliminando i cicli di retry.
+PRECC (Correzione predittiva degli errori per Claude Code) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 Gratuito per sempre per gli utenti community.
 
-## Il problema
+## The Problem
 
-Claude Code spreca una quantità significativa di token per errori prevenibili:
+Claude Code wastes significant tokens on preventable mistakes:
 
-- **Errori di directory errata** -- Esecuzione di `cargo build` in una directory padre che non ha `Cargo.toml`, poi nuovo tentativo dopo aver letto l'errore.
-- **Cicli di retry** -- Un comando fallito produce output verbose, Claude lo legge, ragiona e ritenta. Ogni ciclo brucia centinaia di token.
-- **Output verbose** -- Comandi come `find` o `ls -R` producono migliaia di righe che Claude deve elaborare.
+- **Wrong-directory errors** -- Running `cargo build` in a parent directory that has no `Cargo.toml`, then retrying after reading the error.
+- **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
+- **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## I quattro pilastri
+## The Four Pillars
 
 ### Correzione contesto (cd-prepend)
 
 Rileva quando comandi come `cargo build` o `npm test` vengono eseguiti nella directory errata e prepone `cd /correct/path &&` prima dell'esecuzione.
 
-### Debug GDB
+### GDB Debugging
 
-Rileva opportunità per collegare GDB per un debug più approfondito di segfault e crash, fornendo informazioni di debug strutturate invece di core dump grezzi.
+Detects opportunities to attach GDB for deeper debugging of segfaults and crashes, providing structured debug information instead of raw core dumps.
 
-### Mining delle sessioni
+### Session Mining
 
-Analizza i log delle sessioni di Claude Code alla ricerca di coppie errore-correzione. Quando lo stesso errore si ripresenta, PRECC conosce già la correzione e la applica automaticamente.
+Mines Claude Code session logs for failure-fix pairs. When the same mistake recurs, PRECC already knows the fix and applies it automatically.
 
-### Skill di automazione
+### Automation Skills
 
-Una libreria di skill integrate e apprese che corrispondono a pattern di comandi e li riscrivono. Le skill sono definite come file TOML o righe SQLite, rendendole facili da ispezionare, modificare e condividere.
+A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 
-## Come funziona (versione da 30 secondi)
+## How It Works (30-Second Version)
 
-1. Claude Code sta per eseguire un comando bash.
-2. Il PreToolUse hook invia il comando a `precc-hook` come JSON su stdin.
-3. `precc-hook` esegue il comando attraverso la pipeline (skill, correzione directory, compressione) in meno di 3 millisecondi.
-4. Il comando corretto viene restituito come JSON su stdout.
-5. Claude Code esegue il comando corretto invece dell'originale.
+1. Claude Code is about to run a bash command.
+2. The PreToolUse hook sends the command to `precc-hook` as JSON on stdin.
+3. `precc-hook` runs the command through the pipeline (skills, directory correction, compression) in under 3 milliseconds.
+4. The corrected command is returned as JSON on stdout.
+5. Claude Code executes the corrected command instead.
 
-Claude non vede mai l'errore. Zero token sprecati.
+Claude never sees the error. No tokens wasted.
 
-### Compressione adattiva
+### Adaptive Compression
 
 Se un comando fallisce dopo la compressione, PRECC salta automaticamente la compressione al tentativo successivo, così Claude riceve l'output completo non compresso per il debug.
 
-## Statistiche d'uso in tempo reale
+## Live Usage Statistics
 
 Versione attuale <span data-stat="current_version">--</span>:
 
-| Metrica | Valore |
+| Metric | Value |
 |---|---|
-| Invocazioni hook | <span data-stat="total_invocations">--</span> |
-| Token risparmiati | <span data-stat="total_tokens_saved">--</span> |
-| Rapporto di risparmio | <span data-stat="saving_pct">--</span>% |
-| Riscritture RTK | <span data-stat="rtk_rewrites">--</span> |
-| Correzioni CD | <span data-stat="cd_prepends">--</span> |
-| Latenza hook | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
+| Hook invocations | <span data-stat="total_invocations">--</span> |
+| Tokens saved | <span data-stat="total_tokens_saved">--</span> |
+| Saving ratio | <span data-stat="saving_pct">--</span>% |
+| RTK rewrites | <span data-stat="rtk_rewrites">--</span> |
+| CD corrections | <span data-stat="cd_prepends">--</span> |
+| Hook latency | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Utenti | <span data-stat="unique_users">--</span> |
 
 ### Measured Savings (Ground Truth)
 
 <div id="measured-savings" style="display:none">
 <table id="measured-summary">
-<thead><tr><th>Metrica</th><th>Valore</th></tr></thead>
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
 <tbody>
 <tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
 <tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
-<tr><td>Token risparmiati</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
-<tr><td>Rapporto di risparmio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Tokens saved</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Saving ratio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
 <tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
 </tbody>
 </table>
@@ -80,7 +80,7 @@ Versione attuale <span data-stat="current_version">--</span>:
 #### By Rewrite Type
 
 <table id="rewrite-type-table">
-<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Token risparmiati</th></tr></thead>
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Tokens saved</th></tr></thead>
 <tbody><tr><td colspan="4"><em>Caricamento...</em></td></tr></tbody>
 </table>
 </div>
@@ -88,14 +88,14 @@ Versione attuale <span data-stat="current_version">--</span>:
 ### Risparmi per versione
 
 <table id="version-breakdown" style="display:none">
-<thead><tr><th>Versione</th><th>Utenti</th><th>Invocazioni hook</th><th>Token risparmiati</th><th>Rapporto di risparmio</th></tr></thead>
+<thead><tr><th>Versione</th><th>Utenti</th><th>Hook invocations</th><th>Tokens saved</th><th>Saving ratio</th></tr></thead>
 <tbody><tr><td colspan="5"><em>Caricamento...</em></td></tr></tbody>
 </table>
 
-<small>Questi numeri si aggiornano automaticamente dalla telemetria anonimizzata.</small>
+<small>These numbers update automatically from anonymized telemetry.</small>
 
-## Link
+## Links
 
 - GitHub: [https://github.com/peria-ai/precc-cc](https://github.com/peria-ai/precc-cc)
-- Sito web: [https://peria.ai](https://peria.ai)
-- Documentazione: [https://precc.cc](https://precc.cc)
+- Website: [https://peria.ai](https://peria.ai)
+- Documentation: [https://precc.cc](https://precc.cc)

@@ -1,12 +1,25 @@
 # PRECC — Predictive Error Correction for Claude Code
 
-Open-source Rust binary. Free forever. Average **28–45% token savings** (up to 66% in token-heavy sessions) by combining output compression with predictive error correction. Under 3ms average hook latency.
+Open-source Rust binary. Free forever. Real measured token savings of **50% aggregate** across 39 measured Bash command classes when paired with [lean-ctx](https://github.com/yvgude/lean-ctx). Adaptive selection picks the best compression mode per command class. Under 3ms average hook latency.
 
 ## Install
 
 ### Option 1: Pre-built binary (recommended)
 
 **Linux / macOS:**
+
+```bash
+# Recommended: install with companion tools (lean-ctx, RTK, nushell)
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash -s -- --extras
+```
+
+The `--extras` flag installs the optional output-compression tools that
+unlock the largest savings — most importantly **lean-ctx**, which alone
+contributes ~50% saving on real workloads. Without `--extras`, PRECC
+still helps via cd-fix and skill matching but you'll miss the biggest
+gains.
+
+To install just the PRECC binary without extras:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash

@@ -121,8 +121,14 @@ fn main() {
                 continue;
             }
         };
-        if basic == 0 {
-            eprintln!("SKIP empty:   {}", &safe_cmd[..safe_cmd.len().min(60)]);
+        // Skip commands whose output is too small to bother compressing.
+        // Default: 250 tokens (~1KB). Override via PRECC_CAMPAIGN_MIN_TOKENS.
+        let min_tokens: u64 = std::env::var("PRECC_CAMPAIGN_MIN_TOKENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(250);
+        if basic < min_tokens {
+            eprintln!("SKIP small:   {} ({} tokens)", &safe_cmd[..safe_cmd.len().min(60)], basic);
             continue;
         }
 

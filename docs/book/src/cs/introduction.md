@@ -1,75 +1,75 @@
-# Úvod
+# Introduction
 
-## Co je PRECC?
+## What is PRECC?
 
-PRECC (Prediktivní korekce chyb pro Claude Code) je nástroj v Rustu, který zachytává bash příkazy Claude Code přes oficiální mechanismus PreToolUse hook. Opravuje chyby *dříve, než nastanou*, šetří tokeny a eliminuje smyčky opakování.
+PRECC (Prediktivní korekce chyb pro Claude Code) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 Zdarma pro uživatele komunity.
 
-## Problém
+## The Problem
 
-Claude Code plýtvá významnými tokeny na předejitelné chyby:
+Claude Code wastes significant tokens on preventable mistakes:
 
-- **Chyby špatného adresáře** -- Spuštění `cargo build` v nadřazeném adresáři bez `Cargo.toml`, poté opakování po přečtení chyby.
-- **Smyčky opakování** -- Neúspěšný příkaz vytváří rozvláčný výstup, Claude ho čte, uvažuje a opakuje. Každý cyklus spálí stovky tokenů.
-- **Rozvláčný výstup** -- Příkazy jako `find` nebo `ls -R` vypíšou tisíce řádků, které Claude musí zpracovat.
+- **Wrong-directory errors** -- Running `cargo build` in a parent directory that has no `Cargo.toml`, then retrying after reading the error.
+- **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
+- **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## Čtyři pilíře
+## The Four Pillars
 
 ### Korekce kontextu (cd-prepend)
 
 Detekuje, když příkazy jako `cargo build` nebo `npm test` běží ve špatném adresáři a předřadí `cd /correct/path &&` před spuštění.
 
-### Ladění GDB
+### GDB Debugging
 
-Detekuje příležitosti pro připojení GDB pro hlubší ladění segfaultů a pádů, poskytuje strukturované debug informace místo surových core dump.
+Detects opportunities to attach GDB for deeper debugging of segfaults and crashes, providing structured debug information instead of raw core dumps.
 
-### Analýza relací
+### Session Mining
 
-Analyzuje logy relací Claude Code pro páry chyba-oprava. Když se stejná chyba opakuje, PRECC už zná opravu a aplikuje ji automaticky.
+Mines Claude Code session logs for failure-fix pairs. When the same mistake recurs, PRECC already knows the fix and applies it automatically.
 
-### Automatizační dovednosti
+### Automation Skills
 
-Knihovna vestavěných a naučených dovedností, které porovnávají vzory příkazů a přepisují je. Dovednosti jsou definovány jako TOML soubory nebo SQLite řádky, což je činí snadno kontrolovatelnými, editovatelnými a sdílitelnými.
+A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 
-## Jak to funguje (30sekundová verze)
+## How It Works (30-Second Version)
 
-1. Claude Code se chystá spustit bash příkaz.
-2. PreToolUse hook pošle příkaz do `precc-hook` jako JSON na stdin.
-3. `precc-hook` spustí příkaz přes pipeline (dovednosti, korekce adresáře, komprese) za méně než 3 milisekundy.
-4. Opravený příkaz je vrácen jako JSON na stdout.
-5. Claude Code vykoná opravený příkaz.
+1. Claude Code is about to run a bash command.
+2. The PreToolUse hook sends the command to `precc-hook` as JSON on stdin.
+3. `precc-hook` runs the command through the pipeline (skills, directory correction, compression) in under 3 milliseconds.
+4. The corrected command is returned as JSON on stdout.
+5. Claude Code executes the corrected command instead.
 
-Claude nikdy nevidí chybu. Nula zbytečných tokenů.
+Claude never sees the error. No tokens wasted.
 
-### Adaptivní komprese
+### Adaptive Compression
 
 Pokud příkaz selže po kompresi, PRECC automaticky přeskočí kompresi při opakování, aby Claude dostal plný nekomprimovaný výstup pro ladění.
 
-## Živé statistiky využití
+## Live Usage Statistics
 
 Aktuální verze <span data-stat="current_version">--</span>:
 
-| Metrika | Hodnota |
+| Metric | Value |
 |---|---|
-| Vyvolání hooku | <span data-stat="total_invocations">--</span> |
-| Ušetřené tokeny | <span data-stat="total_tokens_saved">--</span> |
-| Poměr úspor | <span data-stat="saving_pct">--</span>% |
-| RTK přepisy | <span data-stat="rtk_rewrites">--</span> |
-| CD korekce | <span data-stat="cd_prepends">--</span> |
-| Latence hooku | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
+| Hook invocations | <span data-stat="total_invocations">--</span> |
+| Tokens saved | <span data-stat="total_tokens_saved">--</span> |
+| Saving ratio | <span data-stat="saving_pct">--</span>% |
+| RTK rewrites | <span data-stat="rtk_rewrites">--</span> |
+| CD corrections | <span data-stat="cd_prepends">--</span> |
+| Hook latency | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | Uživatelé | <span data-stat="unique_users">--</span> |
 
 ### Measured Savings (Ground Truth)
 
 <div id="measured-savings" style="display:none">
 <table id="measured-summary">
-<thead><tr><th>Metrika</th><th>Hodnota</th></tr></thead>
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
 <tbody>
 <tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
 <tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
-<tr><td>Ušetřené tokeny</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
-<tr><td>Poměr úspor</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Tokens saved</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Saving ratio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
 <tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
 </tbody>
 </table>
@@ -80,7 +80,7 @@ Aktuální verze <span data-stat="current_version">--</span>:
 #### By Rewrite Type
 
 <table id="rewrite-type-table">
-<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Ušetřené tokeny</th></tr></thead>
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Tokens saved</th></tr></thead>
 <tbody><tr><td colspan="4"><em>Načítání...</em></td></tr></tbody>
 </table>
 </div>
@@ -88,14 +88,14 @@ Aktuální verze <span data-stat="current_version">--</span>:
 ### Úspory podle verze
 
 <table id="version-breakdown" style="display:none">
-<thead><tr><th>Verze</th><th>Uživatelé</th><th>Vyvolání hooku</th><th>Ušetřené tokeny</th><th>Poměr úspor</th></tr></thead>
+<thead><tr><th>Verze</th><th>Uživatelé</th><th>Hook invocations</th><th>Tokens saved</th><th>Saving ratio</th></tr></thead>
 <tbody><tr><td colspan="5"><em>Načítání...</em></td></tr></tbody>
 </table>
 
-<small>Tato čísla se automaticky aktualizují z anonymizované telemetrie.</small>
+<small>These numbers update automatically from anonymized telemetry.</small>
 
-## Odkazy
+## Links
 
 - GitHub: [https://github.com/peria-ai/precc-cc](https://github.com/peria-ai/precc-cc)
-- Webové stránky: [https://peria.ai](https://peria.ai)
-- Dokumentace: [https://precc.cc](https://precc.cc)
+- Website: [https://peria.ai](https://peria.ai)
+- Documentation: [https://precc.cc](https://precc.cc)

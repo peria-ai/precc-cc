@@ -1,12 +1,12 @@
-# မိတ်ဆက်
+# Introduction
 
-## PRECC ဆိုတာ ဘာလဲ?
+## What is PRECC?
 
-PRECC (Claude Code အတွက် ကြိုတင်ခန့်မှန်းအမှားပြင်ဆင်ခြင်း) သည် တရားဝင် PreToolUse hook ယန္တရားမှတဆင့် Claude Code bash ညွှန်ကြားချက်များကို ကြားဖြတ်ယူသည့် Rust tool ဖြစ်သည်။
+PRECC (Claude Code အတွက် ကြိုတင်ခန့်မှန်းအမှားပြင်ဆင်ခြင်း) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 အသိုင်းအဝိုင်းသုံးစွဲသူများအတွက် အခမဲ့။
 
-## ပြဿနာ
+## The Problem
 
 Claude Code wastes significant tokens on preventable mistakes:
 
@@ -14,21 +14,21 @@ Claude Code wastes significant tokens on preventable mistakes:
 - **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
 - **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## မဏ္ဍိုင်လေးခု
+## The Four Pillars
 
 ### Context ပြင်ဆင်ခြင်း (cd-prepend)
 
 `cargo build` သို့မဟုတ် `npm test` ကဲ့သို့ command များ directory မှားတွင် run နေကြောင်း ရှာဖွေပြီး execution မတိုင်မီ `cd /မှန်ကန်သော/path &&` ကို ထည့်ပေးသည်။
 
-### GDB အမှားရှာခြင်း
+### GDB Debugging
 
 Detects opportunities to attach GDB for deeper debugging of segfaults and crashes, providing structured debug information instead of raw core dumps.
 
-### Session ကို တူးဖော်ခြင်း
+### Session Mining
 
 Mines Claude Code session logs for failure-fix pairs. When the same mistake recurs, PRECC already knows the fix and applies it automatically.
 
-### အလိုအလျောက် ကျွမ်းကျင်မှုများ
+### Automation Skills
 
 A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 

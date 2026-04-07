@@ -1,75 +1,75 @@
-# مقدمه
+# Introduction
 
-## PRECC چیست؟
+## What is PRECC?
 
-PRECC (تصحیح خطای پیش‌بینانه برای Claude Code) یک ابزار Rust است که دستورات bash Claude Code را از طریق مکانیزم رسمی هوک PreToolUse رهگیری می‌کند. خطاها را *قبل از وقوع* اصلاح می‌کند.
+PRECC (تصحیح خطای پیش‌بینانه برای Claude Code) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 رایگان برای کاربران جامعه.
 
-## مشکل
+## The Problem
 
-Claude Code توکن‌های قابل توجهی را روی خطاهای قابل پیشگیری هدر می‌دهد:
+Claude Code wastes significant tokens on preventable mistakes:
 
-- **خطاهای پوشه** -- اجرای `cargo build` بدون `Cargo.toml`
-- **حلقه‌های تلاش مجدد** -- دستور ناموفق خروجی طولانی تولید می‌کند
-- **خروجی طولانی** -- دستوراتی مانند `find` یا `ls -R` هزاران خط تولید می‌کنند
+- **Wrong-directory errors** -- Running `cargo build` in a parent directory that has no `Cargo.toml`, then retrying after reading the error.
+- **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
+- **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## چهار ستون
+## The Four Pillars
 
 ### اصلاح زمینه (cd-prepend)
 
 تشخیص می‌دهد زمانی که دستوراتی مانند `cargo build` یا `npm test` در پوشه اشتباه اجرا می‌شوند و `cd /مسیر/درست &&` را قبل از اجرا اضافه می‌کند.
 
-### اشکال‌زدایی GDB
+### GDB Debugging
 
-فرصت‌های اتصال GDB را شناسایی می‌کند.
+Detects opportunities to attach GDB for deeper debugging of segfaults and crashes, providing structured debug information instead of raw core dumps.
 
-### کاوش جلسات
+### Session Mining
 
-لاگ‌های جلسه Claude Code را برای یافتن جفت‌های خطا-اصلاح تحلیل می‌کند.
+Mines Claude Code session logs for failure-fix pairs. When the same mistake recurs, PRECC already knows the fix and applies it automatically.
 
-### مهارت‌های خودکارسازی
+### Automation Skills
 
-کتابخانه‌ای از مهارت‌ها که الگوهای دستور را تطبیق داده و بازنویسی می‌کنند.
+A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 
-## چگونه کار می‌کند (نسخه 30 ثانیه‌ای)
+## How It Works (30-Second Version)
 
-1. Claude Code در حال اجرای یک دستور bash است.
-2. هوک PreToolUse دستور را به صورت JSON ارسال می‌کند.
-3. `precc-hook` دستور را در کمتر از 3 میلی‌ثانیه پردازش می‌کند.
-4. دستور اصلاح‌شده برگردانده می‌شود.
-5. Claude Code دستور اصلاح‌شده را اجرا می‌کند.
+1. Claude Code is about to run a bash command.
+2. The PreToolUse hook sends the command to `precc-hook` as JSON on stdin.
+3. `precc-hook` runs the command through the pipeline (skills, directory correction, compression) in under 3 milliseconds.
+4. The corrected command is returned as JSON on stdout.
+5. Claude Code executes the corrected command instead.
 
-Claude هرگز خطا را نمی‌بیند.
+Claude never sees the error. No tokens wasted.
 
-### فشرده‌سازی تطبیقی
+### Adaptive Compression
 
 اگر یک دستور پس از فشرده‌سازی شکست بخورد، PRECC به طور خودکار فشرده‌سازی را در تلاش بعدی رد می‌کند تا Claude خروجی کامل غیرفشرده را برای اشکال‌زدایی دریافت کند.
 
-## آمار استفاده زنده
+## Live Usage Statistics
 
 نسخه فعلی <span data-stat="current_version">--</span>:
 
-| معیار | مقدار |
+| Metric | Value |
 |---|---|
-| فراخوانی‌های هوک | <span data-stat="total_invocations">--</span> |
-| توکن‌های صرفه‌جویی شده | <span data-stat="total_tokens_saved">--</span> |
-| نسبت صرفه‌جویی | <span data-stat="saving_pct">--</span>% |
-| بازنویسی‌های RTK | <span data-stat="rtk_rewrites">--</span> |
-| اصلاحات CD | <span data-stat="cd_prepends">--</span> |
-| تأخیر هوک | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
+| Hook invocations | <span data-stat="total_invocations">--</span> |
+| Tokens saved | <span data-stat="total_tokens_saved">--</span> |
+| Saving ratio | <span data-stat="saving_pct">--</span>% |
+| RTK rewrites | <span data-stat="rtk_rewrites">--</span> |
+| CD corrections | <span data-stat="cd_prepends">--</span> |
+| Hook latency | <span data-stat="avg_latency_p50_ms">--</span> ms (p50) |
 | کاربران | <span data-stat="unique_users">--</span> |
 
 ### Measured Savings (Ground Truth)
 
 <div id="measured-savings" style="display:none">
 <table id="measured-summary">
-<thead><tr><th>معیار</th><th>مقدار</th></tr></thead>
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
 <tbody>
 <tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
 <tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
-<tr><td>توکن‌های صرفه‌جویی شده</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
-<tr><td>نسبت صرفه‌جویی</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
+<tr><td>Tokens saved</td><td><strong><span data-measured="savings_tokens">--</span></strong></td></tr>
+<tr><td>Saving ratio</td><td><strong><span data-measured="savings_pct">--</span>%</strong></td></tr>
 <tr><td>Ground-truth measurements</td><td><span data-measured="ground_truth_count">--</span> measurements</td></tr>
 </tbody>
 </table>
@@ -80,7 +80,7 @@ Claude هرگز خطا را نمی‌بیند.
 #### By Rewrite Type
 
 <table id="rewrite-type-table">
-<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>توکن‌های صرفه‌جویی شده</th></tr></thead>
+<thead><tr><th>Type</th><th>Count</th><th>Avg Savings %</th><th>Tokens saved</th></tr></thead>
 <tbody><tr><td colspan="4"><em>در حال بارگذاری...</em></td></tr></tbody>
 </table>
 </div>
@@ -88,14 +88,14 @@ Claude هرگز خطا را نمی‌بیند.
 ### صرفه‌جویی بر اساس نسخه
 
 <table id="version-breakdown" style="display:none">
-<thead><tr><th>نسخه</th><th>کاربران</th><th>فراخوانی‌های هوک</th><th>توکن‌های صرفه‌جویی شده</th><th>نسبت صرفه‌جویی</th></tr></thead>
+<thead><tr><th>نسخه</th><th>کاربران</th><th>Hook invocations</th><th>Tokens saved</th><th>Saving ratio</th></tr></thead>
 <tbody><tr><td colspan="5"><em>در حال بارگذاری...</em></td></tr></tbody>
 </table>
 
-<small>این اعداد به طور خودکار از داده‌های اندازه‌گیری ناشناس به‌روز می‌شوند.</small>
+<small>These numbers update automatically from anonymized telemetry.</small>
 
-## پیوندها
+## Links
 
 - GitHub: [https://github.com/peria-ai/precc-cc](https://github.com/peria-ai/precc-cc)
-- وب‌سایت: [https://peria.ai](https://peria.ai)
-- مستندات: [https://precc.cc](https://precc.cc)
+- Website: [https://peria.ai](https://peria.ai)
+- Documentation: [https://precc.cc](https://precc.cc)

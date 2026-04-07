@@ -1,12 +1,12 @@
-# ངོ་སྤྲོད།
+# Introduction
 
-## PRECC ཅི་ཞིག་ཡིན།
+## What is PRECC?
 
-PRECC (Claude Code ཡི་སྔོན་བརྟག་ནོར་འཆུག་བཅོས་སྒྲིག) ནི་ཆོག་ཅན་གྱི PreToolUse hook བརྒྱུད་ནས Claude Code bash བཀའ་རྒྱ་བར་གཅོད་བྱེད་པའི Rust ལག་ཆ་ཞིག་ཡིན། ནོར་འཆུག་*མ་བྱུང་གོང་*བཅོས་སྒྲིག་བྱས་ནས token འགྲོ་གྲོན་ཉུང་དུ་གཏོང་།
+PRECC (Claude Code ཡི་སྔོན་བརྟག་ནོར་འཆུག་བཅོས་སྒྲིག) is a Rust tool that intercepts Claude Code bash commands via the official PreToolUse hook mechanism. It fixes errors *before they happen*, saving tokens and eliminating retry loops.
 
 སྤྱི་ཚོགས་བཀོལ་མཁན་ལ་རིན་མེད།
 
-## དཀའ་ངལ།
+## The Problem
 
 Claude Code wastes significant tokens on preventable mistakes:
 
@@ -14,7 +14,7 @@ Claude Code wastes significant tokens on preventable mistakes:
 - **Retry loops** -- A failed command produces verbose output, Claude reads it, reasons about it, and retries. Each cycle burns hundreds of tokens.
 - **Verbose output** -- Commands like `find` or `ls -R` dump thousands of lines that Claude must process.
 
-## རྩ་དོན་བཞི།
+## The Four Pillars
 
 ### Context Fix (cd-prepend)
 
@@ -32,7 +32,7 @@ Mines Claude Code session logs for failure-fix pairs. When the same mistake recu
 
 A library of built-in and mined skills that match command patterns and rewrite them. Skills are defined as TOML files or SQLite rows, making them easy to inspect, edit, and share.
 
-## ལས་ཀ་ཇི་ལྟར་བྱེད།
+## How It Works (30-Second Version)
 
 1. Claude Code is about to run a bash command.
 2. The PreToolUse hook sends the command to `precc-hook` as JSON on stdin.
@@ -46,11 +46,11 @@ Claude never sees the error. No tokens wasted.
 
 If a command fails after compression, PRECC automatically skips compression on the retry so Claude gets the full uncompressed output to debug with.
 
-## དུས་ཐོག་བཀོལ་སྤྱོད་གྲངས་ཐོ།
+## Live Usage Statistics
 
 Current version <span data-stat="current_version">--</span>:
 
-| ཚད་གཞི། | གྲངས་ཀ |
+| Metric | Value |
 |---|---|
 | Hook invocations | <span data-stat="total_invocations">--</span> |
 | Tokens saved | <span data-stat="total_tokens_saved">--</span> |
@@ -64,7 +64,7 @@ Current version <span data-stat="current_version">--</span>:
 
 <div id="measured-savings" style="display:none">
 <table id="measured-summary">
-<thead><tr><th>ཚད་གཞི།</th><th>གྲངས་ཀ</th></tr></thead>
+<thead><tr><th>Metric</th><th>Value</th></tr></thead>
 <tbody>
 <tr><td>Original output tokens (without PRECC)</td><td><span data-measured="original_output_tokens">--</span></td></tr>
 <tr><td>Actual output tokens (with PRECC)</td><td><span data-measured="actual_output_tokens">--</span></td></tr>
@@ -94,7 +94,7 @@ Current version <span data-stat="current_version">--</span>:
 
 <small>These numbers update automatically from anonymized telemetry.</small>
 
-## སྦྲེལ་མཐུད།
+## Links
 
 - GitHub: [https://github.com/peria-ai/precc-cc](https://github.com/peria-ai/precc-cc)
 - Website: [https://peria.ai](https://peria.ai)
