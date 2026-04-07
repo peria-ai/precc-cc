@@ -9,20 +9,16 @@ Open-source Rust binary. Free forever. Real measured token savings of **50% aggr
 **Linux / macOS:**
 
 ```bash
-# Recommended: install with companion tools (lean-ctx, RTK, nushell)
-curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash -s -- --extras
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
 ```
 
-The `--extras` flag installs the optional output-compression tools that
-unlock the largest savings — most importantly **lean-ctx**, which alone
-contributes ~50% saving on real workloads. Without `--extras`, PRECC
-still helps via cd-fix and skill matching but you'll miss the biggest
-gains.
-
-To install just the PRECC binary without extras:
+This installs PRECC plus its companion compression tools (lean-ctx,
+RTK, nushell, cocoindex-code) by default. **lean-ctx** alone contributes
+~50% aggregate saving on real measured workloads. To skip the companion
+tools and install only the precc binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/peria-ai/precc-cc/main/scripts/install.sh | bash -s -- --no-extras
 ```
 
 **Windows (PowerShell):**
