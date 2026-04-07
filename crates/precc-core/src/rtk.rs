@@ -587,6 +587,21 @@ pub fn tokens_saved(command: &str) -> u32 {
     0
 }
 
+/// Returns true if an RTK rule exists for this command, regardless of
+/// whether the rtk binary is installed.
+pub fn has_rule(command: &str) -> bool {
+    if command.starts_with("rtk ") || command.contains("/rtk ") {
+        return false;
+    }
+    if crate::lean_ctx::is_tool_command(command) {
+        return false;
+    }
+    if command.contains("<<") {
+        return false;
+    }
+    RULES.iter().any(|rule| matches_prefix(command, rule.from))
+}
+
 /// Attempt to rewrite a command to its RTK equivalent.
 /// Returns `Some(rewritten)` if a rewrite was applied, `None` otherwise.
 pub fn rewrite(command: &str) -> Option<String> {

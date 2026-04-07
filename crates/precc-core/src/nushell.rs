@@ -339,6 +339,18 @@ fn matches_prefix(command: &str, prefix: &str) -> bool {
 ///
 /// The returned string is a bash command that invokes nushell (e.g., `nu -c "..."`
 /// or uses compact CLI flags that produce structured output).
+/// Returns true if a nushell rule exists for this command, regardless of
+/// whether nu is installed. Used by `precc analyze` to identify rule gaps.
+pub fn has_rule(command: &str) -> bool {
+    if command.starts_with("nu ") || command.contains("| nu ") {
+        return false;
+    }
+    if crate::lean_ctx::is_tool_command(command) {
+        return false;
+    }
+    NU_RULES.iter().any(|rule| matches_prefix(command, rule.from))
+}
+
 pub fn wrap(command: &str) -> Option<String> {
     // Skip if already wrapped in nushell
     if command.starts_with("nu ") || command.contains("| nu ") {

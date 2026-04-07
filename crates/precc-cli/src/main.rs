@@ -144,6 +144,27 @@ enum Commands {
         #[command(subcommand)]
         action: NushellAction,
     },
+    /// Analyze Claude Code session logs to find rule gaps
+    Analyze {
+        #[command(subcommand)]
+        action: AnalyzeAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum AnalyzeAction {
+    /// Count Bash command class frequencies and report uncovered ones
+    Frequencies {
+        /// Limit to top N command classes (default 50)
+        #[arg(long, default_value = "50")]
+        top: usize,
+        /// Only show command classes with NO existing rule (the gaps)
+        #[arg(long)]
+        gaps: bool,
+        /// Output as TSV instead of formatted table
+        #[arg(long)]
+        tsv: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -375,6 +396,7 @@ fn main() -> Result<()> {
         Some(Commands::Geofence { action }) => cmd_geofence(action),
         Some(Commands::Trial { email }) => cmd_trial(email),
         Some(Commands::Nushell { action }) => cmd_nushell(action),
+        Some(Commands::Analyze { action }) => cmd_analyze(action),
         None => {
             println!("precc — Predictive Error Correction for Claude Code");
             println!();
@@ -3386,6 +3408,173 @@ fn cmd_nushell(action: NushellAction) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// =============================================================================
+// precc analyze
+// =============================================================================
+
+fn cmd_analyze(action: AnalyzeAction) -> Result<()> {
+    match action {
+        AnalyzeAction::Frequencies { top, gaps, tsv } => cmd_analyze_frequencies(top, gaps, tsv),
+    }
+}
+
+fn cmd_analyze_frequencies(top: usize, gaps_only: bool, tsv: bool) -> Result<()> {
+    use precc_core::{nushell, rtk};
+    use std::collections::HashMap;
+
+    // Find all session JSONL files
+    let session_files = precc_core::mining::find_session_files()
+        .with_context(|| "failed to find session files")?;
+
+    if session_files.is_empty() {
+        println!("No session files found at ~/.claude/projects/");
+        return Ok(());
+    }
+
+    let mut counts: HashMap<String, u64> = HashMap::new();
+    let mut total_invocations = 0u64;
+    let mut sessions_scanned = 0usize;
+
+    for path in &session_files {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        sessions_scanned += 1;
+
+        for line in content.lines() {
+            let msg: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            // Look at message.content (Anthropic API format)
+            let content_blocks = msg
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array());
+            let Some(blocks) = content_blocks else {
+                continue;
+            };
+            for block in blocks {
+                if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                    continue;
+                }
+                if block.get("name").and_then(|n| n.as_str()) != Some("Bash") {
+                    continue;
+                }
+                let cmd = block
+                    .get("input")
+                    .and_then(|i| i.get("command"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("");
+                if cmd.is_empty() {
+                    continue;
+                }
+
+                // Strip cd ... && prefix
+                let mut effective = cmd;
+                if cmd.starts_with("cd ") {
+                    if let Some(idx) = cmd.find(" && ") {
+                        effective = &cmd[idx + 4..];
+                    }
+                }
+                // Strip wrapper prefixes (rtk, lean-ctx -c ', nu -c ')
+                let unwrapped = effective
+                    .strip_prefix("rtk ")
+                    .or_else(|| {
+                        effective.strip_prefix("lean-ctx -c '").map(|s| {
+                            // Remove trailing quote if present
+                            s.strip_suffix('\'').unwrap_or(s)
+                        })
+                    })
+                    .or_else(|| effective.strip_prefix("nu -c '"))
+                    .unwrap_or(effective);
+
+                let cmd_class = precc_core::post_observe::command_class(unwrapped);
+                if cmd_class.is_empty() {
+                    continue;
+                }
+                *counts.entry(cmd_class).or_insert(0) += 1;
+                total_invocations += 1;
+            }
+        }
+    }
+
+    // Sort by descending count
+    let mut sorted: Vec<(String, u64)> = counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Apply gaps filter
+    let filtered: Vec<(String, u64, bool, bool)> = sorted
+        .iter()
+        .map(|(cls, n)| {
+            let has_nu = nushell::has_rule(cls);
+            let has_rtk = rtk::has_rule(cls);
+            (cls.clone(), *n, has_nu, has_rtk)
+        })
+        .filter(|(_, _, has_nu, has_rtk)| {
+            if gaps_only {
+                !has_nu && !has_rtk
+            } else {
+                true
+            }
+        })
+        .take(top)
+        .collect();
+
+    if tsv {
+        println!("count\tcmd_class\tnushell\trtk");
+        for (cls, n, has_nu, has_rtk) in &filtered {
+            println!("{}\t{}\t{}\t{}", n, cls, has_nu, has_rtk);
+        }
+    } else {
+        println!("PRECC Command Frequency Analysis");
+        println!("================================");
+        println!();
+        println!("Sessions scanned   : {}", sessions_scanned);
+        println!("Bash invocations   : {}", total_invocations);
+        println!("Distinct classes   : {}", sorted.len());
+        if gaps_only {
+            println!(
+                "Gaps in top {}    : {} (no nushell or rtk rule)",
+                top,
+                filtered.len()
+            );
+        }
+        println!();
+        println!(
+            "{:>6}  {:<40}  {:>7}  {:>7}",
+            "COUNT", "COMMAND CLASS", "NUSHELL", "RTK"
+        );
+        println!("{}", "-".repeat(70));
+        for (cls, n, has_nu, has_rtk) in &filtered {
+            let nu_mark = if *has_nu { "✓" } else { " " };
+            let rtk_mark = if *has_rtk { "✓" } else { " " };
+            let display_cls = if cls.len() > 40 {
+                format!("{}…", &cls[..39])
+            } else {
+                cls.clone()
+            };
+            println!(
+                "{:>6}  {:<40}  {:>7}  {:>7}",
+                n, display_cls, nu_mark, rtk_mark
+            );
+        }
+        println!();
+        if !gaps_only {
+            let gap_count = sorted
+                .iter()
+                .filter(|(c, _)| !nushell::has_rule(c) && !rtk::has_rule(c))
+                .count();
+            println!(
+                "Use `precc analyze frequencies --gaps` to see only uncovered command classes ({} total).",
+                gap_count
+            );
+        }
+    }
+    Ok(())
 }
 
 // =============================================================================
