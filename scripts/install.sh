@@ -19,7 +19,11 @@ DEFAULT_PREFIX="${HOME}/.local"
 VERSION=""
 PREFIX="${INSTALL_PREFIX:-$DEFAULT_PREFIX}"
 NO_VERIFY=""
-EXTRAS=""
+# Companion tools (lean-ctx, rtk, nushell, cocoindex-code) are installed by
+# default because they contribute the bulk of token savings (lean-ctx alone
+# accounts for ~50% aggregate saving on real measured workloads). Use
+# --no-extras to opt out and install only the precc binary.
+EXTRAS=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -36,7 +40,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --extras)
+            # Kept for backward compatibility — extras are now default-on
             EXTRAS=1
+            shift
+            ;;
+        --no-extras)
+            EXTRAS=""
             shift
             ;;
         *)
@@ -362,33 +371,19 @@ install_rtk() {
 }
 
 # ---------------------------------------------------------------------------
-# Optional companion tools (rtk, lean-ctx, nushell, cocoindex-code)
-# Installed with --extras, or by answering "y" at the interactive prompt.
-# Skipped automatically when stdin is not a terminal (e.g. curl | bash).
+# Companion tools (rtk, lean-ctx, nushell, cocoindex-code) are installed
+# by default because they contribute the bulk of measured token savings.
+# Use --no-extras to skip them.
 # ---------------------------------------------------------------------------
-if [[ -z "${EXTRAS}" ]]; then
-    if [[ -t 0 ]]; then
-        echo ""
-        echo "PRECC works on its own, but optional companion tools can enhance it:"
-        echo "  - RTK: token-optimized CLI output (saves 60-90% per command)"
-        echo "  - lean-ctx: deep output compression (saves up to 88% of context tokens)"
-        echo "  - Nushell: structured shell for compact output"
-        echo "  - cocoindex-code: AST-driven semantic code search"
-        echo ""
-        printf "Install companion tools? [Y/n] "
-        read -r REPLY
-        case "${REPLY}" in
-            [nN]*) EXTRAS="" ;;
-            *)     EXTRAS=1 ;;
-        esac
-    else
-        echo ""
-        echo "Non-interactive mode: skipping optional companion tools."
-        echo "  Re-run with --extras to install them: bash install.sh --extras"
-    fi
-fi
-
 if [[ -n "${EXTRAS}" ]]; then
+    echo ""
+    echo "Installing companion tools for best performance:"
+    echo "  - lean-ctx:        deep output compression (~50% measured aggregate saving)"
+    echo "  - RTK:             token-optimized CLI output (60-90% on small commands)"
+    echo "  - nushell:         structured shell (best for find/grep)"
+    echo "  - cocoindex-code:  AST-driven semantic code search"
+    echo "  (Pass --no-extras to skip)"
+    echo ""
 
 install_rtk
 
